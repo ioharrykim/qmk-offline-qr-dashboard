@@ -124,6 +124,7 @@ const CREATIVE_OPTIONS = [
 ] as const;
 
 const SEARCH_DEBOUNCE_MS = 280;
+const MART_PAGE_SIZE = 40;
 
 function normalizeCreativeInput(value: string): string {
   return value.trim();
@@ -142,6 +143,8 @@ export default function Home() {
   const [highlightedMartIndex, setHighlightedMartIndex] = useState(0);
   const [showAllMarts, setShowAllMarts] = useState(false);
   const [historyMode, setHistoryMode] = useState<"all" | "mart">("all");
+  const [martHasMore, setMartHasMore] = useState(false);
+  const [martOffset, setMartOffset] = useState(0);
 
   const [selectedCreative, setSelectedCreative] = useState<(typeof CREATIVE_OPTIONS)[number]["value"]>("xbanner");
   const [useCustomCreative, setUseCustomCreative] = useState(false);
@@ -158,6 +161,7 @@ export default function Home() {
   const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
 
   const [isMartsLoading, setIsMartsLoading] = useState(false);
+  const [isMartsLoadingMore, setIsMartsLoadingMore] = useState(false);
   const [isLinksLoading, setIsLinksLoading] = useState(false);
   const [isMartStatsLoading, setIsMartStatsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -201,35 +205,77 @@ export default function Home() {
     setLinks(payload.data ?? []);
   }, []);
 
-  const loadMartOptions = useCallback(async (query: string, includeDisabled: boolean) => {
-    setIsMartsLoading(true);
-
+  const fetchMartOptions = useCallback(async (query: string, includeDisabled: boolean, offset: number) => {
     const params = new URLSearchParams();
     if (query.trim()) params.set("q", query.trim());
     if (includeDisabled) params.set("include_disabled", "1");
+    params.set("offset", String(offset));
+    params.set("limit", String(MART_PAGE_SIZE));
 
     const response = await fetch(`/api/marts?${params.toString()}`);
     const payload = (await response.json()) as {
       success: boolean;
       data?: Mart[];
+      paging?: { has_more?: boolean };
       message?: string;
       detail?: string;
     };
 
-    setIsMartsLoading(false);
-
     if (!response.ok || !payload.success) {
-      setMartOptions([]);
-      setErrorMessage(
+      throw new Error(
         `마트 검색 실패: ${payload.message ?? "unknown error"}${payload.detail ? ` (${payload.detail})` : ""}`,
       );
-      return;
     }
 
-    setErrorMessage(null);
-    setMartOptions((payload.data ?? []).slice(0, 30));
-    setHighlightedMartIndex(0);
+    return {
+      items: (payload.data ?? []).slice(0, MART_PAGE_SIZE),
+      hasMore: Boolean(payload.paging?.has_more),
+    };
   }, []);
+
+  const loadMartOptions = useCallback(async (query: string, includeDisabled: boolean) => {
+    setIsMartsLoading(true);
+    try {
+      const result = await fetchMartOptions(query, includeDisabled, 0);
+      if (!result) return;
+      setErrorMessage(null);
+      setMartOptions(result.items);
+      setMartHasMore(result.hasMore);
+      setMartOffset(result.items.length);
+      setHighlightedMartIndex(0);
+    } catch (error) {
+      setMartOptions([]);
+      setMartHasMore(false);
+      setMartOffset(0);
+      setErrorMessage(error instanceof Error ? error.message : "마트 검색 실패");
+    } finally {
+      setIsMartsLoading(false);
+    }
+  }, [fetchMartOptions]);
+
+  const loadMoreMartOptions = useCallback(async () => {
+    if (isMartsLoading || isMartsLoadingMore || !martHasMore) return;
+    setIsMartsLoadingMore(true);
+    try {
+      const result = await fetchMartOptions(martQuery, showAllMarts, martOffset);
+      if (!result) return;
+      setMartOptions((prev) => [...prev, ...result.items]);
+      setMartHasMore(result.hasMore);
+      setMartOffset((prev) => prev + result.items.length);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "마트 추가 로드 실패");
+    } finally {
+      setIsMartsLoadingMore(false);
+    }
+  }, [
+    fetchMartOptions,
+    isMartsLoading,
+    isMartsLoadingMore,
+    martHasMore,
+    martOffset,
+    martQuery,
+    showAllMarts,
+  ]);
 
   const loadMartStats = useCallback(async () => {
     setIsMartStatsLoading(true);
@@ -380,7 +426,7 @@ export default function Home() {
     try {
       let taskId: string | null = null;
 
-      for (let attempt = 0; attempt < 15; attempt += 1) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
         const params = new URLSearchParams();
         params.set("short_url", link.short_url);
         if (link.airbridge_link_id) params.set("airbridge_link_id", link.airbridge_link_id);
@@ -404,7 +450,7 @@ export default function Home() {
           return;
         }
 
-        await new Promise((resolve) => window.setTimeout(resolve, 2000));
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
       }
     } finally {
       setIsReportLoading(false);
@@ -581,26 +627,50 @@ export default function Home() {
                 </div>
 
                 {showDropdown ? (
-                  <div className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-[#E0E1E3] bg-white shadow-lg">
+                  <div
+                    className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-[#E0E1E3] bg-white shadow-lg"
+                    onScroll={(event) => {
+                      const target = event.currentTarget;
+                      if (target.scrollTop + target.clientHeight >= target.scrollHeight - 24) {
+                        void loadMoreMartOptions();
+                      }
+                    }}
+                  >
                     {noResultMessage ? (
                       <p className="px-3 py-2 text-sm text-[#6B6E75]">{noResultMessage}</p>
                     ) : (
-                      martOptions.map((mart, index) => (
-                        <button
-                          type="button"
-                          key={`${mart.code}-${index}`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            handleMartSelect(mart);
-                          }}
-                          className={`block w-full px-3 py-2 text-left text-sm ${
-                            index === highlightedMartIndex ? "bg-[#FFF0EB]" : "hover:bg-[#F4F4F5]"
-                          }`}
-                        >
-                          <span className="font-medium">{mart.name}</span>
-                          <span className="ml-2 text-xs text-[#6B6E75]">({mart.code})</span>
-                        </button>
-                      ))
+                      <>
+                        {martOptions.map((mart, index) => (
+                          <button
+                            type="button"
+                            key={`${mart.code}-${index}`}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              handleMartSelect(mart);
+                            }}
+                            className={`block w-full px-3 py-2 text-left text-sm ${
+                              index === highlightedMartIndex ? "bg-[#FFF0EB]" : "hover:bg-[#F4F4F5]"
+                            }`}
+                          >
+                            <span className="font-medium">{mart.name}</span>
+                            <span className="ml-2 text-xs text-[#6B6E75]">({mart.code})</span>
+                          </button>
+                        ))}
+                        {isMartsLoadingMore ? (
+                          <div className="px-3 py-2 text-xs text-[#6B6E75]">추가 로딩 중...</div>
+                        ) : martHasMore ? (
+                          <button
+                            type="button"
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                              void loadMoreMartOptions();
+                            }}
+                            className="w-full px-3 py-2 text-left text-xs text-[#CC3A00] hover:bg-[#FFF0EB]"
+                          >
+                            더 불러오기
+                          </button>
+                        ) : null}
+                      </>
                     )}
                   </div>
                 ) : null}

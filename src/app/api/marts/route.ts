@@ -4,6 +4,10 @@ import { getSupabaseServerClient } from "@/lib/supabaseServer";
 
 export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams.get("q")?.trim() ?? "";
+  const offsetRaw = Number(request.nextUrl.searchParams.get("offset") ?? "0");
+  const limitRaw = Number(request.nextUrl.searchParams.get("limit") ?? (q.length > 0 ? "30" : "40"));
+  const offset = Number.isFinite(offsetRaw) ? Math.max(0, offsetRaw) : 0;
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : q.length > 0 ? 30 : 40;
   const includeDisabled =
     request.nextUrl.searchParams.get("include_disabled") === "1" ||
     request.nextUrl.searchParams.get("include_disabled") === "true";
@@ -26,9 +30,9 @@ export async function GET(request: NextRequest) {
     query = query.eq("enabled", true);
   }
   if (q.length > 0) {
-    query = query.ilike("name", `%${q}%`).order("name", { ascending: true }).limit(30);
+    query = query.ilike("name", `%${q}%`).order("name", { ascending: true }).range(offset, offset + limit - 1);
   } else {
-    query = query.order("name", { ascending: true }).limit(20);
+    query = query.order("name", { ascending: true }).range(offset, offset + limit - 1);
   }
 
   let { data, error } = await query;
@@ -43,9 +47,9 @@ export async function GET(request: NextRequest) {
       .select("name, code")
       .order("name", { ascending: true });
     if (q.length > 0) {
-      fallbackQuery = fallbackQuery.ilike("name", `%${q}%`).limit(30);
+      fallbackQuery = fallbackQuery.ilike("name", `%${q}%`).range(offset, offset + limit - 1);
     } else {
-      fallbackQuery = fallbackQuery.limit(20);
+      fallbackQuery = fallbackQuery.range(offset, offset + limit - 1);
     }
     const fallback = await fallbackQuery;
     data = fallback.data as typeof data;
@@ -59,5 +63,14 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  return NextResponse.json({ success: true, data: data ?? [] });
+  const items = data ?? [];
+  return NextResponse.json({
+    success: true,
+    data: items,
+    paging: {
+      offset,
+      limit,
+      has_more: items.length === limit,
+    },
+  });
 }
