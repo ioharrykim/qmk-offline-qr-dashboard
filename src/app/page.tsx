@@ -134,6 +134,16 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
+function optimizeQrSvgForDesign(svg: string): string {
+  return svg
+    .replace(
+      "<svg ",
+      '<svg shape-rendering="crispEdges" text-rendering="geometricPrecision" ',
+    )
+    .replace(/stroke-width="[^"]*"/g, "")
+    .replace(/stroke="[^"]*"/g, "");
+}
+
 export default function Home() {
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [martQuery, setMartQuery] = useState("");
@@ -383,13 +393,17 @@ export default function Home() {
 
     const [qrDataUrl, qrSvg] = await Promise.all([
       QRCode.toDataURL(payload.data.short_url, { margin: 1, width: 320 }),
-      QRCode.toString(payload.data.short_url, { type: "svg", margin: 1, width: 320 }),
+      QRCode.toString(payload.data.short_url, {
+        type: "svg",
+        margin: 4,
+        errorCorrectionLevel: "M",
+      }),
     ]);
 
     setGeneratedCampaignName(payload.data.campaign_name);
     setGeneratedShortUrl(payload.data.short_url);
     setGeneratedQrDataUrl(qrDataUrl);
-    setGeneratedQrSvg(qrSvg);
+    setGeneratedQrSvg(optimizeQrSvgForDesign(qrSvg));
 
     await loadRecentLinks(historyMode, selectedMart?.code);
     setIsSubmitting(false);
