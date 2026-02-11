@@ -25,7 +25,7 @@ function dedupeByMartId(records: SyncRecord[]) {
     byMartId.set(record.mart_id, record);
   }
 
-  return { records: [...byMartId.values()], dropped };
+  return { records: Array.from(byMartId.values()), dropped };
 }
 
 function ensureUniqueCodesInBatch<T extends { mart_id: number; code: string }>(records: T[]) {

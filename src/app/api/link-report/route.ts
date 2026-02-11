@@ -27,7 +27,7 @@ function tokenCandidates() {
   const list = [apiToken, trackingToken].filter(
     (token): token is string => !isTemplateValue(token),
   );
-  return [...new Set(list)];
+  return Array.from(new Set(list));
 }
 
 async function sleep(ms: number) {
@@ -137,7 +137,7 @@ function pickKeyByCandidates(items: Record<string, unknown>[], candidates: strin
     }
   }
 
-  for (const key of keys) {
+  for (const key of Array.from(keys)) {
     const lower = key.toLowerCase();
     if (candidates.some((candidate) => lower.includes(candidate.toLowerCase()))) {
       return key;
@@ -304,9 +304,9 @@ export async function GET(request: NextRequest) {
         app_deeplink_opens: pickKeyByCandidates(metricItems, ["app_deeplink_opens", "deeplink_opens"]),
         web_opens: pickKeyByCandidates(metricItems, ["web_opens"]),
       };
-      const reportMetricKeys = [...new Set(
-        Object.values(metricKeyByLabel).filter((key): key is string => Boolean(key)),
-      )];
+      const reportMetricKeys = Array.from(
+        new Set(Object.values(metricKeyByLabel).filter((key): key is string => Boolean(key))),
+      );
 
       const { response: fieldRes, payload: fieldPayload } = await fetchAirbridgeJson(
         `https://api.airbridge.io/dataspec/v2/apps/${encodeURIComponent(appName as string)}/actual-report/fields`,
@@ -341,11 +341,13 @@ export async function GET(request: NextRequest) {
           reportMessage =
             "리포트용 metric 또는 link dimension 키를 찾지 못했습니다. AIRBRIDGE_CLICK_METRIC / AIRBRIDGE_LINK_DIMENSION 설정을 확인하세요.";
         } else {
-          const filterValues = [...new Set(
-            [identifier, detailShortId, detailTrackingLinkId].filter(
-              (value): value is string => Boolean(value && value.trim()),
+          const filterValues = Array.from(
+            new Set(
+              [identifier, detailShortId, detailTrackingLinkId].filter(
+                (value): value is string => Boolean(value && value.trim()),
+              ),
             ),
-          )];
+          );
 
           const reportGroupBys = [
             linkDimension,

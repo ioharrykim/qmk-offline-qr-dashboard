@@ -1,10 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Lock, LogIn } from "lucide-react";
 
-export default function EnterPage() {
+function EnterPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "/";
@@ -79,5 +79,13 @@ export default function EnterPage() {
         </form>
       </section>
     </main>
+  );
+}
+
+export default function EnterPage() {
+  return (
+    <Suspense fallback={<main className="qmk-surface min-h-screen" />}>
+      <EnterPageContent />
+    </Suspense>
   );
 }
