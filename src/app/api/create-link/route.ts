@@ -54,12 +54,13 @@ async function createAirbridgeLink(params: {
   const apiToken = process.env.AIRBRIDGE_API_TOKEN;
   const trackingLinkToken = process.env.AIRBRIDGE_TRACKING_LINK_API_TOKEN;
   const channelName = process.env.AIRBRIDGE_CHANNEL_NAME || "offline-qr";
+  const deeplinkUrl = process.env.AIRBRIDGE_DEEPLINK_URL || "qmarket://home";
   const authToken = trackingLinkToken || apiToken;
   const hasAirbridgeEnv =
     !isTemplateValue(appName) && !isTemplateValue(authToken);
 
   if (hasAirbridgeEnv) {
-    // TODO(Phase 4): extend payload with routing/deeplink/ogTag fields as needed.
+    // NOTE: Qmarket app deep link 기본값을 포함한다.
     const response = await fetch("https://api.airbridge.io/v1/tracking-links", {
       method: "POST",
       headers: {
@@ -75,6 +76,7 @@ async function createAirbridgeLink(params: {
           ad_creative: params.adCreative,
         },
         isReengagement: "OFF",
+        deeplinkUrl,
       }),
     });
 
