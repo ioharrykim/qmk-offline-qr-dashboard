@@ -134,14 +134,24 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
-function optimizeQrSvgForDesign(svg: string): string {
-  return svg
-    .replace(
-      "<svg ",
-      '<svg shape-rendering="crispEdges" text-rendering="geometricPrecision" ',
-    )
-    .replace(/stroke-width="[^"]*"/g, "")
-    .replace(/stroke="[^"]*"/g, "");
+function buildIllustratorSafeQrSvg(value: string): string {
+  const qr = QRCode.create(value, { errorCorrectionLevel: "M" });
+  const margin = 4;
+  const moduleSize = qr.modules.size;
+  const size = moduleSize + margin * 2;
+
+  const path: string[] = [];
+  for (let y = 0; y < moduleSize; y += 1) {
+    for (let x = 0; x < moduleSize; x += 1) {
+      if (qr.modules.get(x, y)) {
+        const px = x + margin;
+        const py = y + margin;
+        path.push(`M${px} ${py}h1v1h-1z`);
+      }
+    }
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#ffffff"/><path d="${path.join("")}" fill="#000000"/></svg>`;
 }
 
 export default function Home() {
@@ -393,17 +403,13 @@ export default function Home() {
 
     const [qrDataUrl, qrSvg] = await Promise.all([
       QRCode.toDataURL(payload.data.short_url, { margin: 1, width: 320 }),
-      QRCode.toString(payload.data.short_url, {
-        type: "svg",
-        margin: 4,
-        errorCorrectionLevel: "M",
-      }),
+      Promise.resolve(buildIllustratorSafeQrSvg(payload.data.short_url)),
     ]);
 
     setGeneratedCampaignName(payload.data.campaign_name);
     setGeneratedShortUrl(payload.data.short_url);
     setGeneratedQrDataUrl(qrDataUrl);
-    setGeneratedQrSvg(optimizeQrSvgForDesign(qrSvg));
+    setGeneratedQrSvg(qrSvg);
 
     await loadRecentLinks(historyMode, selectedMart?.code);
     setIsSubmitting(false);
