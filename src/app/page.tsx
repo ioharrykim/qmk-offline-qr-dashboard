@@ -67,6 +67,17 @@ type ClearLinksResponse = {
   };
 };
 
+type MartStatsResponse = {
+  success: boolean;
+  message?: string;
+  detail?: string;
+  data?: {
+    total: number;
+    enabled: number;
+    disabled: number;
+  };
+};
+
 type LinkReportResponse = {
   success: boolean;
   message?: string;
@@ -144,9 +155,11 @@ export default function Home() {
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
   const [selectedLinkReport, setSelectedLinkReport] = useState<LinkReportResponse["data"] | null>(null);
   const [copyToast, setCopyToast] = useState("");
+  const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
 
   const [isMartsLoading, setIsMartsLoading] = useState(false);
   const [isLinksLoading, setIsLinksLoading] = useState(false);
+  const [isMartStatsLoading, setIsMartStatsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSyncingMarts, setIsSyncingMarts] = useState(false);
   const [isReportLoading, setIsReportLoading] = useState(false);
@@ -218,6 +231,19 @@ export default function Home() {
     setHighlightedMartIndex(0);
   }, []);
 
+  const loadMartStats = useCallback(async () => {
+    setIsMartStatsLoading(true);
+    const response = await fetch("/api/marts/stats");
+    const payload = (await response.json()) as MartStatsResponse;
+    setIsMartStatsLoading(false);
+
+    if (!response.ok || !payload.success || !payload.data) {
+      return;
+    }
+
+    setMartStats(payload.data);
+  }, []);
+
   const handleSyncMarts = async () => {
     setIsSyncingMarts(true);
     setErrorMessage(null);
@@ -238,6 +264,7 @@ export default function Home() {
     setSyncSummary(payload.summary);
     await loadMartOptions(martQuery, showAllMarts);
     await loadRecentLinks(historyMode, selectedMart?.code);
+    await loadMartStats();
   };
 
   const handleClearLinks = async () => {
@@ -402,6 +429,10 @@ export default function Home() {
   }, [loadMartOptions, showAllMarts]);
 
   useEffect(() => {
+    void loadMartStats();
+  }, [loadMartStats]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadMartOptions(martQuery, showAllMarts);
     }, SEARCH_DEBOUNCE_MS);
@@ -442,6 +473,23 @@ export default function Home() {
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#FF6D33]">Qmarket Offline QR</p>
               <h1 className="mt-2 text-2xl font-bold">마트 마케팅 링크 대시보드</h1>
               <p className="mt-1 text-sm text-[#6B6E75]">QR 생성, 마트 동기화, 마트별 링크 이력과 리포트까지 한 번에 확인합니다.</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {isMartStatsLoading ? (
+                  <div className="h-7 w-60 animate-pulse rounded-full bg-[#F4F4F5]" />
+                ) : martStats ? (
+                  <>
+                    <span className="inline-flex items-center rounded-full border border-[#66C2A0] bg-[#E6F5EF] px-2.5 py-1 text-xs font-medium text-[#004D33]">
+                      운영중 마트 {martStats.enabled}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-[#FFD580] bg-[#FFF5E0] px-2.5 py-1 text-xs font-medium text-[#CC8200]">
+                      대기중 마트 {martStats.disabled}
+                    </span>
+                    <span className="inline-flex items-center rounded-full border border-[#E0E1E3] bg-white px-2.5 py-1 text-xs font-medium text-[#6B6E75]">
+                      전체 {martStats.total}
+                    </span>
+                  </>
+                ) : null}
+              </div>
             </div>
             <button
               type="button"
