@@ -136,7 +136,7 @@ async function copyText(value: string) {
 
 function buildIllustratorSafeQrSvg(value: string): string {
   const qr = QRCode.create(value, { errorCorrectionLevel: "M" });
-  const margin = 4;
+  const margin = 0;
   const moduleSize = qr.modules.size;
   const size = moduleSize + margin * 2;
 
@@ -151,7 +151,7 @@ function buildIllustratorSafeQrSvg(value: string): string {
     }
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#ffffff"/><path d="${path.join("")}" fill="#000000"/></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><path d="${path.join("")}" fill="#000000"/></svg>`;
 }
 
 export default function Home() {
@@ -426,6 +426,38 @@ export default function Home() {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadHistoryQr = async (
+    shortUrl: string,
+    campaignName: string,
+    formatType: "png" | "svg",
+  ) => {
+    try {
+      if (formatType === "png") {
+        const dataUrl = await QRCode.toDataURL(shortUrl, { margin: 1, width: 320 });
+        const anchor = document.createElement("a");
+        anchor.href = dataUrl;
+        anchor.download = `${campaignName || "qrcode"}.png`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        document.body.removeChild(anchor);
+        return;
+      }
+
+      const svg = buildIllustratorSafeQrSvg(shortUrl);
+      const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${campaignName || "qrcode"}.svg`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorMessage("이력 QR 다운로드에 실패했습니다.");
+    }
   };
 
   const handleCopy = async (label: string, value: string) => {
@@ -868,6 +900,7 @@ export default function Home() {
                     <th className="px-2 py-2">마트코드</th>
                     <th className="px-2 py-2">캠페인명</th>
                     <th className="px-2 py-2">링크</th>
+                    <th className="px-2 py-2">QR</th>
                     <th className="px-2 py-2">리포트</th>
                   </tr>
                 </thead>
@@ -878,6 +911,24 @@ export default function Home() {
                       <td className="px-2 py-2">{link.mart_code}</td>
                       <td className="px-2 py-2 font-medium">{link.campaign_name}</td>
                       <td className="px-2 py-2"><a href={link.short_url} target="_blank" rel="noreferrer" className="text-[#3182CE] hover:underline">{link.short_url}</a></td>
+                      <td className="px-2 py-2">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadHistoryQr(link.short_url, link.campaign_name, "png")}
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#66C2A0] hover:bg-[#E6F5EF]"
+                          >
+                            <Download className="h-3.5 w-3.5" /> PNG
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadHistoryQr(link.short_url, link.campaign_name, "svg")}
+                            className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#FFD580] hover:bg-[#FFF5E0]"
+                          >
+                            <Download className="h-3.5 w-3.5" /> SVG
+                          </button>
+                        </div>
+                      </td>
                       <td className="px-2 py-2">
                         <button
                           type="button"
