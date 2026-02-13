@@ -113,6 +113,34 @@ type LinkReportResponse = {
   };
 };
 
+type LinksResponse = {
+  success: boolean;
+  data?: LinkRow[];
+  message?: string;
+  detail?: string;
+  paging?: {
+    limit: number;
+    offset: number;
+    has_more: boolean;
+  };
+};
+
+type BulkCreateResponse = {
+  success: boolean;
+  message?: string;
+  detail?: string;
+  summary?: {
+    requested: number;
+    created: number;
+    failed: number;
+  };
+  errors?: Array<{
+    mart_code: string;
+    ad_creative: string;
+    message: string;
+  }>;
+};
+
 const CREATIVE_OPTIONS = [
   { value: "xbanner", label: "X배너" },
   { value: "banner", label: "현수막" },
@@ -125,9 +153,21 @@ const CREATIVE_OPTIONS = [
 
 const SEARCH_DEBOUNCE_MS = 280;
 const MART_PAGE_SIZE = 40;
+const HISTORY_SEARCH_DEBOUNCE_MS = 220;
 
 function normalizeCreativeInput(value: string): string {
   return value.trim();
+}
+
+function parseTextList(value: string): string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/[,\n]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
 }
 
 async function copyText(value: string) {
@@ -165,10 +205,17 @@ export default function Home() {
   const [historyMode, setHistoryMode] = useState<"all" | "mart">("all");
   const [martHasMore, setMartHasMore] = useState(false);
   const [martOffset, setMartOffset] = useState(0);
+  const [createMode, setCreateMode] = useState<"single" | "bulk">("single");
 
   const [selectedCreative, setSelectedCreative] = useState<(typeof CREATIVE_OPTIONS)[number]["value"]>("xbanner");
   const [useCustomCreative, setUseCustomCreative] = useState(false);
   const [customCreative, setCustomCreative] = useState("");
+  const [bulkMartCodesInput, setBulkMartCodesInput] = useState("");
+  const [bulkCustomCreativesInput, setBulkCustomCreativesInput] = useState("");
+  const [bulkSelectedCreatives, setBulkSelectedCreatives] = useState<string[]>(["xbanner"]);
+  const [bulkSummary, setBulkSummary] = useState<BulkCreateResponse["summary"] | null>(null);
+  const [bulkErrorRows, setBulkErrorRows] = useState<BulkCreateResponse["errors"]>([]);
+  const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
   const [generatedCampaignName, setGeneratedCampaignName] = useState("");
   const [generatedShortUrl, setGeneratedShortUrl] = useState("");
@@ -190,6 +237,12 @@ export default function Home() {
   const [isClearingLinks, setIsClearingLinks] = useState(false);
   const [reportTargetShortUrl, setReportTargetShortUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyCreativeFilter, setHistoryCreativeFilter] = useState("all");
+  const [historyDateFrom, setHistoryDateFrom] = useState("");
+  const [historyDateTo, setHistoryDateTo] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(20);
+  const [historyQueryDebounced, setHistoryQueryDebounced] = useState("");
 
   const comboboxRef = useRef<HTMLDivElement>(null);
 
@@ -198,19 +251,32 @@ export default function Home() {
     [customCreative, selectedCreative, useCustomCreative],
   );
 
-  const loadRecentLinks = useCallback(async (mode: "all" | "mart", martCode?: string) => {
+  const bulkCreatives = useMemo(
+    () =>
+      Array.from(
+        new Set([
+          ...bulkSelectedCreatives,
+          ...parseTextList(bulkCustomCreativesInput).map((value) => normalizeCreativeInput(value)),
+        ]),
+      ).filter(Boolean),
+    [bulkCustomCreativesInput, bulkSelectedCreatives],
+  );
+
+  const loadRecentLinks = useCallback(async () => {
     setIsLinksLoading(true);
 
-    const params = new URLSearchParams({ limit: "20" });
-    if (mode === "mart" && martCode) params.set("mart_code", martCode);
+    const params = new URLSearchParams({
+      limit: String(historyLimit),
+      offset: "0",
+    });
+    if (historyMode === "mart" && selectedMart?.code) params.set("mart_code", selectedMart.code);
+    if (historyQueryDebounced) params.set("q", historyQueryDebounced);
+    if (historyCreativeFilter !== "all") params.set("ad_creative", historyCreativeFilter);
+    if (historyDateFrom) params.set("date_from", historyDateFrom);
+    if (historyDateTo) params.set("date_to", historyDateTo);
 
     const response = await fetch(`/api/links?${params.toString()}`);
-    const payload = (await response.json()) as {
-      success: boolean;
-      data?: LinkRow[];
-      message?: string;
-      detail?: string;
-    };
+    const payload = (await response.json()) as LinksResponse;
 
     setIsLinksLoading(false);
 
@@ -223,7 +289,15 @@ export default function Home() {
     }
 
     setLinks(payload.data ?? []);
-  }, []);
+  }, [
+    historyCreativeFilter,
+    historyDateFrom,
+    historyDateTo,
+    historyLimit,
+    historyMode,
+    historyQueryDebounced,
+    selectedMart?.code,
+  ]);
 
   const fetchMartOptions = useCallback(async (query: string, includeDisabled: boolean, offset: number) => {
     const params = new URLSearchParams();
@@ -329,7 +403,7 @@ export default function Home() {
 
     setSyncSummary(payload.summary);
     await loadMartOptions(martQuery, showAllMarts);
-    await loadRecentLinks(historyMode, selectedMart?.code);
+    await loadRecentLinks();
     await loadMartStats();
   };
 
@@ -357,7 +431,7 @@ export default function Home() {
       }
 
       setSelectedLinkReport(null);
-      await loadRecentLinks(historyMode, selectedMart?.code);
+      await loadRecentLinks();
       setCopyToast(`최근 생성 이력 ${payload.summary?.deleted ?? 0}건 삭제 완료`);
       window.setTimeout(() => setCopyToast(""), 1600);
     } finally {
@@ -411,8 +485,79 @@ export default function Home() {
     setGeneratedQrDataUrl(qrDataUrl);
     setGeneratedQrSvg(qrSvg);
 
-    await loadRecentLinks(historyMode, selectedMart?.code);
+    await loadRecentLinks();
     setIsSubmitting(false);
+  };
+
+  const toggleBulkCreative = (creative: string) => {
+    setBulkSelectedCreatives((prev) =>
+      prev.includes(creative)
+        ? prev.filter((value) => value !== creative)
+        : [...prev, creative],
+    );
+  };
+
+  const handleAddSelectedMartToBulk = () => {
+    if (!selectedMart) {
+      setErrorMessage("마트를 먼저 선택해주세요.");
+      return;
+    }
+    const nextValues = Array.from(
+      new Set([...parseTextList(bulkMartCodesInput), selectedMart.code]),
+    );
+    setBulkMartCodesInput(nextValues.join("\n"));
+    setCopyToast(`마트 코드 추가: ${selectedMart.code}`);
+    window.setTimeout(() => setCopyToast(""), 1200);
+  };
+
+  const handleBulkCreateLinks = async () => {
+    const martCodes = parseTextList(bulkMartCodesInput);
+    if (martCodes.length === 0) {
+      setErrorMessage("대량 생성할 mart_code를 1개 이상 입력해주세요.");
+      return;
+    }
+    if (bulkCreatives.length === 0) {
+      setErrorMessage("대량 생성할 소재를 1개 이상 선택/입력해주세요.");
+      return;
+    }
+
+    setIsBulkSubmitting(true);
+    setErrorMessage(null);
+    setBulkSummary(null);
+    setBulkErrorRows([]);
+
+    try {
+      const response = await fetch("/api/create-link/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mart_codes: martCodes,
+          ad_creatives: bulkCreatives,
+        }),
+      });
+      const payload = (await response.json()) as BulkCreateResponse;
+
+      if (!response.ok || !payload.summary) {
+        setErrorMessage(
+          `대량 링크 생성 실패: ${payload.message ?? "unknown error"}${payload.detail ? ` (${payload.detail})` : ""}`,
+        );
+        return;
+      }
+
+      setBulkSummary(payload.summary);
+      setBulkErrorRows(payload.errors ?? []);
+      await loadRecentLinks();
+    } finally {
+      setIsBulkSubmitting(false);
+    }
+  };
+
+  const handleResetHistoryFilters = () => {
+    setHistoryQuery("");
+    setHistoryCreativeFilter("all");
+    setHistoryDateFrom("");
+    setHistoryDateTo("");
+    setHistoryLimit(20);
   };
 
   const handleDownloadSvg = () => {
@@ -482,7 +627,10 @@ export default function Home() {
         const params = new URLSearchParams();
         params.set("short_url", link.short_url);
         if (link.airbridge_link_id) params.set("airbridge_link_id", link.airbridge_link_id);
-        if (taskId) params.set("task_id", taskId);
+        if (taskId) {
+          params.set("task_id", taskId);
+          params.set("refresh", "1");
+        }
 
         const response = await fetch(`/api/link-report?${params.toString()}`);
         const payload = (await response.json()) as LinkReportResponse;
@@ -519,8 +667,8 @@ export default function Home() {
   }, [isMartsLoading, martOptions.length, martQuery]);
 
   useEffect(() => {
-    void loadRecentLinks(historyMode, selectedMart?.code);
-  }, [historyMode, loadRecentLinks, selectedMart?.code]);
+    void loadRecentLinks();
+  }, [loadRecentLinks]);
 
   useEffect(() => {
     void loadMartOptions("", showAllMarts);
@@ -529,6 +677,13 @@ export default function Home() {
   useEffect(() => {
     void loadMartStats();
   }, [loadMartStats]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setHistoryQueryDebounced(historyQuery.trim());
+    }, HISTORY_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [historyQuery]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -551,12 +706,14 @@ export default function Home() {
 
   return (
     <main className="qmk-surface min-h-screen text-[#121417]">
-      {isSyncingMarts || isReportLoading || isClearingLinks ? (
+      {isSyncingMarts || isReportLoading || isClearingLinks || isBulkSubmitting ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center bg-black/10 p-6 sm:items-start">
           <div className="inline-flex items-center gap-2 rounded-full border border-[#E0E1E3] bg-white px-4 py-2 text-sm font-medium shadow-xl">
             <RefreshCw className="h-4 w-4 animate-spin text-[#FF4800]" />
             {isSyncingMarts
               ? "마트 데이터 동기화 중..."
+              : isBulkSubmitting
+                ? "대량 링크 생성 중..."
               : isClearingLinks
                 ? "최근 생성 이력 초기화 중..."
                 : "Airbridge 리포트 불러오는 중..."}
@@ -592,7 +749,7 @@ export default function Home() {
             <button
               type="button"
               onClick={handleSyncMarts}
-              disabled={isSyncingMarts || isSubmitting}
+              disabled={isSyncingMarts || isSubmitting || isBulkSubmitting}
               className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
             >
               {isSyncingMarts ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -649,6 +806,9 @@ export default function Home() {
                     onChange={(event) => {
                       setMartQuery(event.target.value);
                       setSelectedMart(null);
+                      if (historyMode === "mart") {
+                        setHistoryMode("all");
+                      }
                       setIsMartDropdownOpen(true);
                     }}
                     onKeyDown={(event) => {
@@ -764,63 +924,173 @@ export default function Home() {
                 </div>
               ) : null}
 
-              <div>
-                <p className="mb-2 text-sm font-medium text-[#2E3035]">소재 선택</p>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {CREATIVE_OPTIONS.map((creative) => {
-                    const isSelected = !useCustomCreative && selectedCreative === creative.value;
-                    return (
+              <div className="inline-flex rounded-xl border border-[#E0E1E3] bg-[#F4F4F5] p-1 text-sm">
+                <button
+                  type="button"
+                  onClick={() => setCreateMode("single")}
+                  className={`rounded-lg px-3 py-1.5 ${
+                    createMode === "single" ? "bg-white text-[#121417]" : "text-[#6B6E75]"
+                  }`}
+                >
+                  단건 생성
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCreateMode("bulk")}
+                  className={`rounded-lg px-3 py-1.5 ${
+                    createMode === "bulk" ? "bg-white text-[#121417]" : "text-[#6B6E75]"
+                  }`}
+                >
+                  대량 생성
+                </button>
+              </div>
+
+              {createMode === "single" ? (
+                <>
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-[#2E3035]">소재 선택</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {CREATIVE_OPTIONS.map((creative) => {
+                        const isSelected = !useCustomCreative && selectedCreative === creative.value;
+                        return (
+                          <button
+                            type="button"
+                            key={creative.value}
+                            onClick={() => {
+                              setUseCustomCreative(false);
+                              setSelectedCreative(creative.value);
+                            }}
+                            className={`rounded-lg border px-3 py-2 text-sm ${
+                              isSelected
+                                ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
+                                : "border-[#E0E1E3] bg-white text-[#2E3035] hover:bg-[#F4F4F5]"
+                            }`}
+                          >
+                            {creative.label}
+                          </button>
+                        );
+                      })}
+
                       <button
                         type="button"
-                        key={creative.value}
-                        onClick={() => {
-                          setUseCustomCreative(false);
-                          setSelectedCreative(creative.value);
-                        }}
+                        onClick={() => setUseCustomCreative(true)}
                         className={`rounded-lg border px-3 py-2 text-sm ${
-                          isSelected
+                          useCustomCreative
                             ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
                             : "border-[#E0E1E3] bg-white text-[#2E3035] hover:bg-[#F4F4F5]"
                         }`}
                       >
-                        {creative.label}
+                        직접 입력
                       </button>
-                    );
-                  })}
+                    </div>
+
+                    {useCustomCreative ? (
+                      <input
+                        type="text"
+                        value={customCreative}
+                        onChange={(event) => setCustomCreative(event.target.value)}
+                        placeholder="직접 입력 (campaign_name에 반영)"
+                        className="mt-2 w-full rounded-xl border border-[#E0E1E3] bg-[#F4F4F5] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                      />
+                    ) : null}
+                  </div>
 
                   <button
                     type="button"
-                    onClick={() => setUseCustomCreative(true)}
-                    className={`rounded-lg border px-3 py-2 text-sm ${
-                      useCustomCreative
-                        ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
-                        : "border-[#E0E1E3] bg-white text-[#2E3035] hover:bg-[#F4F4F5]"
-                    }`}
+                    onClick={handleCreateLink}
+                    disabled={isSubmitting || isSyncingMarts || isBulkSubmitting || !selectedMart || !effectiveCreative}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
                   >
-                    직접 입력
+                    {isSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                    생성하기
                   </button>
+                </>
+              ) : (
+                <div className="space-y-3 rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-[#2E3035]">대량 생성 설정</p>
+                    <button
+                      type="button"
+                      onClick={handleAddSelectedMartToBulk}
+                      className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-1 text-xs text-[#6B6E75] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                    >
+                      선택 마트 코드 추가
+                    </button>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs text-[#6B6E75]">마트 코드 목록 (쉼표/줄바꿈 구분)</label>
+                    <textarea
+                      value={bulkMartCodesInput}
+                      onChange={(event) => setBulkMartCodesInput(event.target.value)}
+                      placeholder="예) urimart_hwamyeong, kingkongsikjajemart"
+                      rows={4}
+                      className="w-full rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                    />
+                  </div>
+
+                  <div>
+                    <p className="mb-1 text-xs text-[#6B6E75]">소재 다중 선택</p>
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {CREATIVE_OPTIONS.map((creative) => {
+                        const isChecked = bulkSelectedCreatives.includes(creative.value);
+                        return (
+                          <button
+                            type="button"
+                            key={`bulk-${creative.value}`}
+                            onClick={() => toggleBulkCreative(creative.value)}
+                            className={`rounded-lg border px-2 py-2 text-xs ${
+                              isChecked
+                                ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
+                                : "border-[#E0E1E3] bg-white text-[#2E3035]"
+                            }`}
+                          >
+                            {creative.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <input
+                      type="text"
+                      value={bulkCustomCreativesInput}
+                      onChange={(event) => setBulkCustomCreativesInput(event.target.value)}
+                      placeholder="추가 소재 직접 입력 (쉼표 구분)"
+                      className="mt-2 w-full rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                    />
+                  </div>
+
+                  <p className="text-xs text-[#6B6E75]">
+                    예상 생성 건수: {parseTextList(bulkMartCodesInput).length} marts x {bulkCreatives.length} creatives ={" "}
+                    <span className="font-semibold text-[#CC3A00]">
+                      {parseTextList(bulkMartCodesInput).length * bulkCreatives.length}
+                    </span>
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={handleBulkCreateLinks}
+                    disabled={isBulkSubmitting || isSubmitting || isSyncingMarts}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#00724C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#004D33] disabled:cursor-not-allowed disabled:bg-[#66C2A0]"
+                  >
+                    {isBulkSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+                    대량 링크 생성
+                  </button>
+
+                  {bulkSummary ? (
+                    <div className="rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-xs text-[#2E3035]">
+                      요청 {bulkSummary.requested}건 / 성공 {bulkSummary.created}건 / 실패 {bulkSummary.failed}건
+                    </div>
+                  ) : null}
+                  {bulkErrorRows && bulkErrorRows.length > 0 ? (
+                    <div className="max-h-24 overflow-auto rounded-lg border border-[#E53E3E]/30 bg-[#FDECEC] px-3 py-2 text-xs text-[#B83232]">
+                      {bulkErrorRows.slice(0, 20).map((row, index) => (
+                        <p key={`${row.mart_code}-${row.ad_creative}-${index}`}>
+                          {row.mart_code} / {row.ad_creative}: {row.message}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
-
-                {useCustomCreative ? (
-                  <input
-                    type="text"
-                    value={customCreative}
-                    onChange={(event) => setCustomCreative(event.target.value)}
-                    placeholder="직접 입력 (campaign_name에 반영)"
-                    className="mt-2 w-full rounded-xl border border-[#E0E1E3] bg-[#F4F4F5] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
-                  />
-                ) : null}
-              </div>
-
-              <button
-                type="button"
-                onClick={handleCreateLink}
-                disabled={isSubmitting || isSyncingMarts || !selectedMart || !effectiveCreative}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
-              >
-                {isSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-                생성하기
-              </button>
+              )}
             </div>
           </div>
 
@@ -884,6 +1154,58 @@ export default function Home() {
                 <button type="button" onClick={() => setHistoryMode("all")} className={`rounded-lg px-3 py-1.5 ${historyMode === "all" ? "bg-white text-[#121417]" : "text-[#6B6E75]"}`}>전체</button>
                 <button type="button" onClick={() => setHistoryMode("mart")} disabled={!selectedMart} className={`rounded-lg px-3 py-1.5 ${historyMode === "mart" ? "bg-white text-[#121417]" : "text-[#6B6E75]"} disabled:opacity-40`}>선택 마트</button>
               </div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] p-3 sm:grid-cols-2 lg:grid-cols-6">
+            <input
+              type="text"
+              value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.target.value)}
+              placeholder="캠페인명/링크/마트코드 검색"
+              className="rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33] sm:col-span-2"
+            />
+            <select
+              value={historyCreativeFilter}
+              onChange={(event) => setHistoryCreativeFilter(event.target.value)}
+              className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-2 text-sm outline-none focus:border-[#FF6D33]"
+            >
+              <option value="all">소재 전체</option>
+              {CREATIVE_OPTIONS.map((creative) => (
+                <option key={`filter-${creative.value}`} value={creative.value}>
+                  {creative.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="date"
+              value={historyDateFrom}
+              onChange={(event) => setHistoryDateFrom(event.target.value)}
+              className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-2 text-sm outline-none focus:border-[#FF6D33]"
+            />
+            <input
+              type="date"
+              value={historyDateTo}
+              onChange={(event) => setHistoryDateTo(event.target.value)}
+              className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-2 text-sm outline-none focus:border-[#FF6D33]"
+            />
+            <div className="flex items-center gap-2">
+              <select
+                value={historyLimit}
+                onChange={(event) => setHistoryLimit(Number(event.target.value))}
+                className="w-full rounded-lg border border-[#E0E1E3] bg-white px-2 py-2 text-sm outline-none focus:border-[#FF6D33]"
+              >
+                <option value={20}>20개</option>
+                <option value={50}>50개</option>
+                <option value={100}>100개</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleResetHistoryFilters}
+                className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-2 text-xs text-[#6B6E75] hover:bg-[#F4F4F5]"
+              >
+                초기화
+              </button>
             </div>
           </div>
 

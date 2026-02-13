@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { getSupabaseServerClient } from "@/lib/supabaseServer";
+
 function isTemplateValue(value: string | undefined): boolean {
   if (!value) return true;
   const normalized = value.trim();
@@ -51,7 +53,18 @@ type ReportMeta = {
   linkDimension: string;
 };
 
+type CachedReportRow = {
+  short_url: string;
+  report_status: string;
+  data: unknown;
+  expires_at: string;
+};
+
 const REPORT_META_TTL_MS = 10 * 60 * 1000;
+const REPORT_CACHE_TABLE = "link_report_cache";
+const REPORT_CACHE_SUCCESS_TTL_MS = 15 * 60 * 1000;
+const REPORT_CACHE_PENDING_TTL_MS = 20 * 1000;
+const REPORT_CACHE_FAIL_TTL_MS = 2 * 60 * 1000;
 const reportMetaCache = new Map<string, { expiresAt: number; value: ReportMeta }>();
 
 function toRecord(value: unknown): Record<string, unknown> | null {
@@ -178,6 +191,75 @@ function readMetricValue(raw: unknown): number | null {
   return null;
 }
 
+function getReportCacheTtlMs(reportStatus: string) {
+  if (reportStatus === "SUCCESS") return REPORT_CACHE_SUCCESS_TTL_MS;
+  if (reportStatus === "PENDING") return REPORT_CACHE_PENDING_TTL_MS;
+  return REPORT_CACHE_FAIL_TTL_MS;
+}
+
+function shouldIgnoreCacheError(errorMessage: string) {
+  const message = errorMessage.toLowerCase();
+  return (
+    message.includes("relation") ||
+    message.includes("does not exist") ||
+    message.includes("schema cache") ||
+    message.includes("permission denied") ||
+    message.includes("rls")
+  );
+}
+
+async function readCachedReport(shortUrl: string) {
+  const { client } = getSupabaseServerClient();
+  if (!client) return null;
+
+  const { data, error } = await client
+    .from(REPORT_CACHE_TABLE)
+    .select("short_url, report_status, data, expires_at")
+    .eq("short_url", shortUrl)
+    .maybeSingle();
+
+  if (error) {
+    if (!shouldIgnoreCacheError(error.message)) {
+      console.warn(`[link-report] cache read failed: ${error.message}`);
+    }
+    return null;
+  }
+  if (!data) return null;
+  const typedData = data as CachedReportRow;
+
+  const expiresAt = Date.parse(typedData.expires_at);
+  if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    return null;
+  }
+
+  const payload = toRecord(typedData.data);
+  if (!payload) return null;
+  return payload;
+}
+
+async function writeCachedReport(shortUrl: string, reportStatus: string, data: unknown) {
+  const { client } = getSupabaseServerClient();
+  if (!client) return;
+
+  const ttlMs = getReportCacheTtlMs(reportStatus);
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  const payload = {
+    short_url: shortUrl,
+    report_status: reportStatus,
+    data,
+    expires_at: expiresAt,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await client
+    .from(REPORT_CACHE_TABLE)
+    .upsert(payload, { onConflict: "short_url" });
+
+  if (error && !shouldIgnoreCacheError(error.message)) {
+    console.warn(`[link-report] cache write failed: ${error.message}`);
+  }
+}
+
 async function getReportMeta(appName: string, tokenForReport: string): Promise<ReportMeta> {
   const cacheKey = `${appName}:${tokenForReport.slice(0, 8)}`;
   const cached = reportMetaCache.get(cacheKey);
@@ -255,12 +337,24 @@ export async function GET(request: NextRequest) {
   const shortUrl = request.nextUrl.searchParams.get("short_url")?.trim() ?? "";
   const airbridgeLinkId = request.nextUrl.searchParams.get("airbridge_link_id")?.trim() ?? "";
   const requestedTaskId = request.nextUrl.searchParams.get("task_id")?.trim() ?? "";
+  const forceRefresh = request.nextUrl.searchParams.get("refresh") === "1";
 
   if (!shortUrl && !airbridgeLinkId) {
     return NextResponse.json(
       { success: false, message: "short_url 또는 airbridge_link_id가 필요합니다." },
       { status: 400 },
     );
+  }
+
+  if (shortUrl && !forceRefresh) {
+    const cachedData = await readCachedReport(shortUrl);
+    if (cachedData) {
+      return NextResponse.json({
+        success: true,
+        cached: true,
+        data: cachedData,
+      });
+    }
   }
 
   const appName = process.env.AIRBRIDGE_APP_NAME;
@@ -647,26 +741,33 @@ export async function GET(request: NextRequest) {
     reportMessage = error instanceof Error ? error.message : "unknown error";
   }
 
+  const responseData = {
+    idType,
+    identifier,
+    task_id: reportTaskId,
+    click_count: clickCount,
+    report_status: reportStatus,
+    report_message: reportMessage,
+    report_metrics: reportMetrics,
+    report_dimensions: reportDimensions,
+    tracking_link: {
+      id: toRecord(toRecord(detailPayload)?.data)?.id ?? null,
+      short_url: (toRecord(toRecord(detailPayload)?.data)?.shortUrl as string) ?? shortUrl,
+      short_id: (toRecord(toRecord(detailPayload)?.data)?.shortId as string) ?? null,
+      channel_name: (toRecord(toRecord(detailPayload)?.data)?.channelName as string) ?? null,
+      campaign_params:
+        (toRecord(toRecord(detailPayload)?.data)?.campaignParams as Record<string, unknown>) ??
+        null,
+    },
+  };
+
+  const cacheShortUrl = responseData.tracking_link.short_url || shortUrl;
+  if (cacheShortUrl) {
+    await writeCachedReport(cacheShortUrl, reportStatus, responseData);
+  }
+
   return NextResponse.json({
     success: true,
-    data: {
-      idType,
-      identifier,
-      task_id: reportTaskId,
-      click_count: clickCount,
-      report_status: reportStatus,
-      report_message: reportMessage,
-      report_metrics: reportMetrics,
-      report_dimensions: reportDimensions,
-      tracking_link: {
-        id: toRecord(toRecord(detailPayload)?.data)?.id ?? null,
-        short_url: (toRecord(toRecord(detailPayload)?.data)?.shortUrl as string) ?? shortUrl,
-        short_id: (toRecord(toRecord(detailPayload)?.data)?.shortId as string) ?? null,
-        channel_name: (toRecord(toRecord(detailPayload)?.data)?.channelName as string) ?? null,
-        campaign_params:
-          (toRecord(toRecord(detailPayload)?.data)?.campaignParams as Record<string, unknown>) ??
-          null,
-      },
-    },
+    data: responseData,
   });
 }
