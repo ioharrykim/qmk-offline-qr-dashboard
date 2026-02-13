@@ -41,9 +41,39 @@ export async function GET(request: NextRequest) {
   }
   if (q) {
     const safeQ = q.replace(/[,%()]/g, " ").trim();
-    query = query.or(
-      `campaign_name.ilike.%${safeQ}%,short_url.ilike.%${safeQ}%,mart_code.ilike.%${safeQ}%`,
-    );
+    const orConditions: string[] = [];
+
+    if (safeQ.length > 0) {
+      orConditions.push(
+        `campaign_name.ilike.%${safeQ}%`,
+        `short_url.ilike.%${safeQ}%`,
+        `mart_code.ilike.%${safeQ}%`,
+      );
+    }
+
+    const { data: martsByName, error: martsByNameError } = await client
+      .from("marts")
+      .select("code")
+      .ilike("name", `%${safeQ || q}%`)
+      .limit(50);
+
+    if (!martsByNameError) {
+      const martCodes = Array.from(
+        new Set(
+          (martsByName ?? [])
+            .map((row) => row.code?.trim())
+            .filter((code): code is string => Boolean(code)),
+        ),
+      );
+
+      if (martCodes.length > 0) {
+        orConditions.push(`mart_code.in.(${martCodes.join(",")})`);
+      }
+    }
+
+    if (orConditions.length > 0) {
+      query = query.or(orConditions.join(","));
+    }
   }
 
   const { data, error } = await query;
