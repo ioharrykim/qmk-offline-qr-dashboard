@@ -141,6 +141,13 @@ type BulkCreateResponse = {
   }>;
 };
 
+type BulkMartRow = {
+  mart_code: string;
+  mart_name: string | null;
+  selected_creatives: string[];
+  custom_creatives_input: string;
+};
+
 const CREATIVE_OPTIONS = [
   { value: "xbanner", label: "X배너" },
   { value: "banner", label: "현수막" },
@@ -168,6 +175,15 @@ function parseTextList(value: string): string[] {
         .filter(Boolean),
     ),
   );
+}
+
+function buildCreativeList(preset: string[], customInput: string) {
+  return Array.from(
+    new Set([
+      ...preset.map((value) => normalizeCreativeInput(value)),
+      ...parseTextList(customInput).map((value) => normalizeCreativeInput(value)),
+    ]),
+  ).filter(Boolean);
 }
 
 async function copyText(value: string) {
@@ -210,9 +226,11 @@ export default function Home() {
   const [selectedCreative, setSelectedCreative] = useState<(typeof CREATIVE_OPTIONS)[number]["value"]>("xbanner");
   const [useCustomCreative, setUseCustomCreative] = useState(false);
   const [customCreative, setCustomCreative] = useState("");
-  const [bulkMartCodesInput, setBulkMartCodesInput] = useState("");
-  const [bulkCustomCreativesInput, setBulkCustomCreativesInput] = useState("");
-  const [bulkSelectedCreatives, setBulkSelectedCreatives] = useState<string[]>(["xbanner"]);
+  const [bulkRows, setBulkRows] = useState<BulkMartRow[]>([]);
+  const [bulkCodeInput, setBulkCodeInput] = useState("");
+  const [bulkCodesPasteInput, setBulkCodesPasteInput] = useState("");
+  const [bulkCommonSelectedCreatives, setBulkCommonSelectedCreatives] = useState<string[]>(["xbanner"]);
+  const [bulkCommonCustomCreativesInput, setBulkCommonCustomCreativesInput] = useState("");
   const [bulkSummary, setBulkSummary] = useState<BulkCreateResponse["summary"] | null>(null);
   const [bulkErrorRows, setBulkErrorRows] = useState<BulkCreateResponse["errors"]>([]);
   const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
@@ -251,15 +269,16 @@ export default function Home() {
     [customCreative, selectedCreative, useCustomCreative],
   );
 
-  const bulkCreatives = useMemo(
+  const bulkRequestedCount = useMemo(
     () =>
-      Array.from(
-        new Set([
-          ...bulkSelectedCreatives,
-          ...parseTextList(bulkCustomCreativesInput).map((value) => normalizeCreativeInput(value)),
-        ]),
-      ).filter(Boolean),
-    [bulkCustomCreativesInput, bulkSelectedCreatives],
+      bulkRows.reduce((sum, row) => {
+        const creatives = buildCreativeList(
+          row.selected_creatives,
+          row.custom_creatives_input,
+        );
+        return sum + creatives.length;
+      }, 0),
+    [bulkRows],
   );
 
   const loadRecentLinks = useCallback(async () => {
@@ -489,35 +508,150 @@ export default function Home() {
     setIsSubmitting(false);
   };
 
-  const toggleBulkCreative = (creative: string) => {
-    setBulkSelectedCreatives((prev) =>
-      prev.includes(creative)
-        ? prev.filter((value) => value !== creative)
-        : [...prev, creative],
-    );
-  };
+  const resolveMartNameByCode = useCallback(
+    (code: string) => {
+      if (selectedMart?.code === code) return selectedMart.name;
+      return martOptions.find((item) => item.code === code)?.name ?? null;
+    },
+    [martOptions, selectedMart],
+  );
+
+  const appendBulkRows = useCallback(
+    (codes: string[]) => {
+      const normalizedCodes = Array.from(
+        new Set(codes.map((value) => value.trim()).filter(Boolean)),
+      );
+      if (normalizedCodes.length === 0) return 0;
+
+      let addedCount = 0;
+      setBulkRows((prev) => {
+        const existing = new Set(prev.map((row) => row.mart_code));
+        const next = [...prev];
+        for (const code of normalizedCodes) {
+          if (existing.has(code)) continue;
+          addedCount += 1;
+          next.push({
+            mart_code: code,
+            mart_name: resolveMartNameByCode(code),
+            selected_creatives: ["xbanner"],
+            custom_creatives_input: "",
+          });
+        }
+        return next;
+      });
+      return addedCount;
+    },
+    [resolveMartNameByCode],
+  );
 
   const handleAddSelectedMartToBulk = () => {
     if (!selectedMart) {
       setErrorMessage("마트를 먼저 선택해주세요.");
       return;
     }
-    const nextValues = Array.from(
-      new Set([...parseTextList(bulkMartCodesInput), selectedMart.code]),
+    const addedCount = appendBulkRows([selectedMart.code]);
+    setCopyToast(
+      addedCount > 0 ? `마트 추가: ${selectedMart.code}` : "이미 추가된 마트입니다.",
     );
-    setBulkMartCodesInput(nextValues.join("\n"));
-    setCopyToast(`마트 코드 추가: ${selectedMart.code}`);
     window.setTimeout(() => setCopyToast(""), 1200);
   };
 
-  const handleBulkCreateLinks = async () => {
-    const martCodes = parseTextList(bulkMartCodesInput);
-    if (martCodes.length === 0) {
-      setErrorMessage("대량 생성할 mart_code를 1개 이상 입력해주세요.");
+  const handleAddBulkCodeInput = () => {
+    const code = bulkCodeInput.trim();
+    if (!code) return;
+    const addedCount = appendBulkRows([code]);
+    setBulkCodeInput("");
+    if (addedCount === 0) {
+      setCopyToast("이미 추가된 마트 코드입니다.");
+    } else {
+      setCopyToast(`마트 코드 추가: ${code}`);
+    }
+    window.setTimeout(() => setCopyToast(""), 1200);
+  };
+
+  const handleAddBulkCodesFromPaste = () => {
+    const codes = parseTextList(bulkCodesPasteInput);
+    if (codes.length === 0) {
+      setErrorMessage("추가할 마트 코드가 없습니다.");
       return;
     }
-    if (bulkCreatives.length === 0) {
-      setErrorMessage("대량 생성할 소재를 1개 이상 선택/입력해주세요.");
+    const addedCount = appendBulkRows(codes);
+    setBulkCodesPasteInput("");
+    setCopyToast(`${addedCount}개 마트 코드가 추가되었습니다.`);
+    window.setTimeout(() => setCopyToast(""), 1200);
+  };
+
+  const toggleBulkCommonCreative = (creative: string) => {
+    setBulkCommonSelectedCreatives((prev) =>
+      prev.includes(creative)
+        ? prev.filter((value) => value !== creative)
+        : [...prev, creative],
+    );
+  };
+
+  const applyCommonCreativesToAllRows = () => {
+    if (bulkRows.length === 0) {
+      setErrorMessage("먼저 마트를 1개 이상 추가해주세요.");
+      return;
+    }
+    setBulkRows((prev) =>
+      prev.map((row) => ({
+        ...row,
+        selected_creatives: [...bulkCommonSelectedCreatives],
+        custom_creatives_input: bulkCommonCustomCreativesInput,
+      })),
+    );
+    setCopyToast("공통 소재를 모든 마트에 적용했습니다.");
+    window.setTimeout(() => setCopyToast(""), 1200);
+  };
+
+  const toggleRowCreative = (martCode: string, creative: string) => {
+    setBulkRows((prev) =>
+      prev.map((row) =>
+        row.mart_code !== martCode
+          ? row
+          : {
+              ...row,
+              selected_creatives: row.selected_creatives.includes(creative)
+                ? row.selected_creatives.filter((value) => value !== creative)
+                : [...row.selected_creatives, creative],
+            },
+      ),
+    );
+  };
+
+  const updateRowCustomCreatives = (martCode: string, value: string) => {
+    setBulkRows((prev) =>
+      prev.map((row) =>
+        row.mart_code === martCode
+          ? { ...row, custom_creatives_input: value }
+          : row,
+      ),
+    );
+  };
+
+  const removeBulkRow = (martCode: string) => {
+    setBulkRows((prev) => prev.filter((row) => row.mart_code !== martCode));
+  };
+
+  const handleBulkCreateLinks = async () => {
+    if (bulkRows.length === 0) {
+      setErrorMessage("대량 생성할 마트를 1개 이상 추가해주세요.");
+      return;
+    }
+
+    const requestRows = bulkRows
+      .map((row) => ({
+        mart_code: row.mart_code,
+        ad_creatives: buildCreativeList(
+          row.selected_creatives,
+          row.custom_creatives_input,
+        ),
+      }))
+      .filter((row) => row.ad_creatives.length > 0);
+
+    if (requestRows.length === 0) {
+      setErrorMessage("각 마트별로 최소 1개 이상의 소재를 선택해주세요.");
       return;
     }
 
@@ -531,8 +665,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mart_codes: martCodes,
-          ad_creatives: bulkCreatives,
+          rows: requestRows,
         }),
       });
       const payload = (await response.json()) as BulkCreateResponse;
@@ -1008,36 +1141,69 @@ export default function Home() {
               ) : (
                 <div className="space-y-3 rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-[#2E3035]">대량 생성 설정</p>
+                    <p className="text-sm font-semibold text-[#2E3035]">대량 생성 설정 (마트별 소재 지정)</p>
                     <button
                       type="button"
                       onClick={handleAddSelectedMartToBulk}
                       className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-1 text-xs text-[#6B6E75] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
                     >
-                      선택 마트 코드 추가
+                      선택 마트 추가
                     </button>
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs text-[#6B6E75]">마트 코드 목록 (쉼표/줄바꿈 구분)</label>
-                    <textarea
-                      value={bulkMartCodesInput}
-                      onChange={(event) => setBulkMartCodesInput(event.target.value)}
-                      placeholder="예) urimart_hwamyeong, kingkongsikjajemart"
-                      rows={4}
+
+                  <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                    <input
+                      type="text"
+                      value={bulkCodeInput}
+                      onChange={(event) => setBulkCodeInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          handleAddBulkCodeInput();
+                        }
+                      }}
+                      placeholder="마트 코드 직접 입력 (예: naiseumart_yeongyeong)"
                       className="w-full rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
                     />
+                    <button
+                      type="button"
+                      onClick={handleAddBulkCodeInput}
+                      className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                    >
+                      코드 추가
+                    </button>
                   </div>
 
-                  <div>
-                    <p className="mb-1 text-xs text-[#6B6E75]">소재 다중 선택</p>
+                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <p className="mb-1 text-xs text-[#6B6E75]">마트 코드 일괄 붙여넣기 (쉼표/줄바꿈)</p>
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <textarea
+                        value={bulkCodesPasteInput}
+                        onChange={(event) => setBulkCodesPasteInput(event.target.value)}
+                        placeholder="예) urimart_hwamyeong, kingkongsikjajemart"
+                        rows={3}
+                        className="w-full rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddBulkCodesFromPaste}
+                        className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                      >
+                        목록으로 추가
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <p className="mb-2 text-xs font-medium text-[#6B6E75]">소재 빠른 일괄 설정 (옵션)</p>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {CREATIVE_OPTIONS.map((creative) => {
-                        const isChecked = bulkSelectedCreatives.includes(creative.value);
+                        const isChecked = bulkCommonSelectedCreatives.includes(creative.value);
                         return (
                           <button
                             type="button"
-                            key={`bulk-${creative.value}`}
-                            onClick={() => toggleBulkCreative(creative.value)}
+                            key={`bulk-common-${creative.value}`}
+                            onClick={() => toggleBulkCommonCreative(creative.value)}
                             className={`rounded-lg border px-2 py-2 text-xs ${
                               isChecked
                                 ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
@@ -1049,20 +1215,89 @@ export default function Home() {
                         );
                       })}
                     </div>
-                    <input
-                      type="text"
-                      value={bulkCustomCreativesInput}
-                      onChange={(event) => setBulkCustomCreativesInput(event.target.value)}
-                      placeholder="추가 소재 직접 입력 (쉼표 구분)"
-                      className="mt-2 w-full rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
-                    />
+                    <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <input
+                        type="text"
+                        value={bulkCommonCustomCreativesInput}
+                        onChange={(event) => setBulkCommonCustomCreativesInput(event.target.value)}
+                        placeholder="추가 소재 직접 입력 (쉼표 구분)"
+                        className="w-full rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                      />
+                      <button
+                        type="button"
+                        onClick={applyCommonCreativesToAllRows}
+                        className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                      >
+                        전체 적용
+                      </button>
+                    </div>
                   </div>
 
+                  {bulkRows.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-[#E0E1E3] bg-white px-3 py-4 text-center text-xs text-[#6B6E75]">
+                      마트를 추가하면 각 마트별로 소재를 개별 설정할 수 있습니다.
+                    </p>
+                  ) : (
+                    <div className="max-h-80 space-y-2 overflow-auto rounded-xl border border-[#E0E1E3] bg-white p-3">
+                      {bulkRows.map((row) => {
+                        const rowCreatives = buildCreativeList(
+                          row.selected_creatives,
+                          row.custom_creatives_input,
+                        );
+                        return (
+                          <div key={row.mart_code} className="rounded-lg border border-[#E0E1E3] bg-[#F8F8F9] p-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-sm font-medium text-[#2E3035]">
+                                {row.mart_name ? `${row.mart_name} (${row.mart_code})` : row.mart_code}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => removeBulkRow(row.mart_code)}
+                                className="text-xs text-[#B83232] hover:underline"
+                              >
+                                제거
+                              </button>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
+                              {CREATIVE_OPTIONS.map((creative) => {
+                                const isChecked = row.selected_creatives.includes(creative.value);
+                                return (
+                                  <button
+                                    type="button"
+                                    key={`${row.mart_code}-${creative.value}`}
+                                    onClick={() => toggleRowCreative(row.mart_code, creative.value)}
+                                    className={`rounded-lg border px-2 py-1.5 text-[11px] ${
+                                      isChecked
+                                        ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
+                                        : "border-[#E0E1E3] bg-white text-[#2E3035]"
+                                    }`}
+                                  >
+                                    {creative.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <input
+                              type="text"
+                              value={row.custom_creatives_input}
+                              onChange={(event) =>
+                                updateRowCustomCreatives(row.mart_code, event.target.value)
+                              }
+                              placeholder="이 마트 전용 추가 소재 (쉼표 구분)"
+                              className="mt-2 w-full rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs outline-none focus:border-[#FF6D33]"
+                            />
+                            <p className="mt-1 text-[11px] text-[#6B6E75]">
+                              생성 소재: {rowCreatives.length > 0 ? rowCreatives.join(", ") : "선택 없음"}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <p className="text-xs text-[#6B6E75]">
-                    예상 생성 건수: {parseTextList(bulkMartCodesInput).length} marts x {bulkCreatives.length} creatives ={" "}
-                    <span className="font-semibold text-[#CC3A00]">
-                      {parseTextList(bulkMartCodesInput).length * bulkCreatives.length}
-                    </span>
+                    예상 생성 건수:{" "}
+                    <span className="font-semibold text-[#CC3A00]">{bulkRequestedCount}</span>
                   </p>
 
                   <button

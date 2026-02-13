@@ -6,6 +6,10 @@ import { getSupabaseServerClient } from "@/lib/supabaseServer";
 type BulkCreateLinkBody = {
   mart_codes?: string[] | string;
   ad_creatives?: string[] | string;
+  rows?: Array<{
+    mart_code?: string;
+    ad_creatives?: string[] | string;
+  }>;
 };
 
 type BulkErrorRow = {
@@ -73,27 +77,56 @@ export async function POST(request: Request) {
     );
   }
 
-  const martCodes = parseList(body.mart_codes);
-  const adCreatives = parseList(body.ad_creatives);
-  if (martCodes.length === 0 || adCreatives.length === 0) {
+  const tasks: Array<{ martCode: string; adCreative: string }> = [];
+
+  if (Array.isArray(body.rows) && body.rows.length > 0) {
+    for (const row of body.rows) {
+      const martCode = row.mart_code?.trim() ?? "";
+      if (!martCode) continue;
+
+      const adCreatives = parseList(row.ad_creatives);
+      for (const adCreative of adCreatives) {
+        tasks.push({ martCode, adCreative });
+      }
+    }
+  } else {
+    const martCodes = parseList(body.mart_codes);
+    const adCreatives = parseList(body.ad_creatives);
+    for (const martCode of martCodes) {
+      for (const adCreative of adCreatives) {
+        tasks.push({ martCode, adCreative });
+      }
+    }
+  }
+
+  const dedupedTasks = Array.from(
+    new Map(
+      tasks
+        .map((task) => ({
+          martCode: task.martCode.trim(),
+          adCreative: task.adCreative.trim(),
+        }))
+        .filter((task) => task.martCode && task.adCreative)
+        .map((task) => [`${task.martCode}__${task.adCreative}`, task] as const),
+    ).values(),
+  );
+
+  if (dedupedTasks.length === 0) {
     return NextResponse.json(
-      { success: false, message: "mart_codes와 ad_creatives는 최소 1개 이상 필요합니다." },
+      {
+        success: false,
+        message:
+          "생성할 작업이 없습니다. mart_codes + ad_creatives 또는 rows[{ mart_code, ad_creatives }]를 확인해주세요.",
+      },
       { status: 400 },
     );
   }
 
-  const tasks: Array<{ martCode: string; adCreative: string }> = [];
-  for (const martCode of martCodes) {
-    for (const adCreative of adCreatives) {
-      tasks.push({ martCode, adCreative });
-    }
-  }
-
-  if (tasks.length > 120) {
+  if (dedupedTasks.length > 120) {
     return NextResponse.json(
       {
         success: false,
-        message: `한 번에 최대 120건까지만 생성할 수 있습니다. 현재 요청: ${tasks.length}건`,
+        message: `한 번에 최대 120건까지만 생성할 수 있습니다. 현재 요청: ${dedupedTasks.length}건`,
       },
       { status: 400 },
     );
@@ -109,7 +142,7 @@ export async function POST(request: Request) {
   const errors: BulkErrorRow[] = [];
 
   await createWithConcurrency(
-    tasks,
+    dedupedTasks,
     async (task) => {
       try {
         const row = await createLinkRecord({
@@ -138,7 +171,7 @@ export async function POST(request: Request) {
   );
 
   const summary = {
-    requested: tasks.length,
+    requested: dedupedTasks.length,
     created: created.length,
     failed: errors.length,
   };
