@@ -1062,7 +1062,9 @@ export default function Home() {
                   type="button"
                   onClick={() => setCreateMode("single")}
                   className={`rounded-lg px-3 py-1.5 ${
-                    createMode === "single" ? "bg-white text-[#121417]" : "text-[#6B6E75]"
+                    createMode === "single"
+                      ? "bg-white font-semibold text-[#121417]"
+                      : "text-[#6B6E75]"
                   }`}
                 >
                   단건 생성
@@ -1071,7 +1073,9 @@ export default function Home() {
                   type="button"
                   onClick={() => setCreateMode("bulk")}
                   className={`rounded-lg px-3 py-1.5 ${
-                    createMode === "bulk" ? "bg-white text-[#121417]" : "text-[#6B6E75]"
+                    createMode === "bulk"
+                      ? "bg-[#FF4800] font-semibold text-white"
+                      : "text-[#6B6E75]"
                   }`}
                 >
                   대량 생성
@@ -1139,63 +1143,73 @@ export default function Home() {
                   </button>
                 </>
               ) : (
-                <div className="space-y-3 rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-[#2E3035]">대량 생성 설정 (마트별 소재 지정)</p>
-                    <button
-                      type="button"
-                      onClick={handleAddSelectedMartToBulk}
-                      className="rounded-lg border border-[#E0E1E3] bg-white px-2 py-1 text-xs text-[#6B6E75] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
-                    >
-                      선택 마트 추가
-                    </button>
+                <div className="space-y-4 rounded-xl border border-[#FF9E73] bg-gradient-to-b from-[#FFF7F3] to-[#FFFFFF] p-4">
+                  <div className="rounded-lg border border-[#FFD8C7] bg-[#FFF0EB] px-3 py-2">
+                    <p className="text-sm font-semibold text-[#CC3A00]">대량 생성 가이드</p>
+                    <p className="mt-1 text-xs text-[#6B6E75]">
+                      1) 마트 추가 → 2) 소재 일괄 설정(선택) → 3) 마트별 소재 조정 → 4) 대량 생성
+                    </p>
                   </div>
 
-                  <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-                    <input
-                      type="text"
-                      value={bulkCodeInput}
-                      onChange={(event) => setBulkCodeInput(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          handleAddBulkCodeInput();
-                        }
-                      }}
-                      placeholder="마트 코드 직접 입력 (예: naiseumart_yeongyeong)"
-                      className="w-full rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleAddBulkCodeInput}
-                      className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
-                    >
-                      코드 추가
-                    </button>
-                  </div>
+                  <section className="space-y-2 rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <p className="text-xs font-semibold text-[#CC3A00]">STEP 1. 마트 추가</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleAddSelectedMartToBulk}
+                        disabled={!selectedMart}
+                        className="inline-flex items-center gap-1 rounded-lg bg-[#FF4800] px-3 py-2 text-xs font-semibold text-white hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
+                      >
+                        선택 마트 추가
+                      </button>
+                      <span className="text-xs text-[#6B6E75]">
+                        {selectedMart ? `${selectedMart.name} (${selectedMart.code})` : "먼저 마트를 검색해 선택하세요"}
+                      </span>
+                    </div>
 
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="mb-1 text-xs text-[#6B6E75]">마트 코드 일괄 붙여넣기 (쉼표/줄바꿈)</p>
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <input
+                        type="text"
+                        value={bulkCodeInput}
+                        onChange={(event) => setBulkCodeInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            handleAddBulkCodeInput();
+                          }
+                        }}
+                        placeholder="마트 코드 직접 입력 (예: naiseumart_yeongyeong)"
+                        className="w-full rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleAddBulkCodeInput}
+                        className="rounded-xl bg-[#FF6D33] px-3 py-2 text-sm font-medium text-white hover:bg-[#CC3A00]"
+                      >
+                        코드 추가
+                      </button>
+                    </div>
+
                     <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                       <textarea
                         value={bulkCodesPasteInput}
                         onChange={(event) => setBulkCodesPasteInput(event.target.value)}
-                        placeholder="예) urimart_hwamyeong, kingkongsikjajemart"
+                        placeholder="마트 코드 일괄 붙여넣기 (쉼표/줄바꿈 구분)"
                         rows={3}
                         className="w-full rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] px-3 py-2 text-sm outline-none focus:border-[#FF6D33]"
                       />
                       <button
                         type="button"
                         onClick={handleAddBulkCodesFromPaste}
-                        className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                        className="rounded-xl bg-[#FF6D33] px-3 py-2 text-sm font-medium text-white hover:bg-[#CC3A00]"
                       >
                         목록으로 추가
                       </button>
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="mb-2 text-xs font-medium text-[#6B6E75]">소재 빠른 일괄 설정 (옵션)</p>
+                  <section className="space-y-2 rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <p className="text-xs font-semibold text-[#CC3A00]">STEP 2. 공통 소재 일괄 설정 (선택)</p>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       {CREATIVE_OPTIONS.map((creative) => {
                         const isChecked = bulkCommonSelectedCreatives.includes(creative.value);
@@ -1215,7 +1229,7 @@ export default function Home() {
                         );
                       })}
                     </div>
-                    <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
                       <input
                         type="text"
                         value={bulkCommonCustomCreativesInput}
@@ -1226,89 +1240,100 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={applyCommonCreativesToAllRows}
-                        className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 text-sm text-[#2E3035] hover:bg-[#FFF0EB] hover:text-[#CC3A00]"
+                        className="rounded-xl bg-[#FFA300] px-3 py-2 text-sm font-medium text-[#121417] hover:bg-[#CC8200] hover:text-white"
                       >
                         전체 적용
                       </button>
                     </div>
-                  </div>
+                  </section>
 
-                  {bulkRows.length === 0 ? (
-                    <p className="rounded-xl border border-dashed border-[#E0E1E3] bg-white px-3 py-4 text-center text-xs text-[#6B6E75]">
-                      마트를 추가하면 각 마트별로 소재를 개별 설정할 수 있습니다.
-                    </p>
-                  ) : (
-                    <div className="max-h-80 space-y-2 overflow-auto rounded-xl border border-[#E0E1E3] bg-white p-3">
-                      {bulkRows.map((row) => {
-                        const rowCreatives = buildCreativeList(
-                          row.selected_creatives,
-                          row.custom_creatives_input,
-                        );
-                        return (
-                          <div key={row.mart_code} className="rounded-lg border border-[#E0E1E3] bg-[#F8F8F9] p-2">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-sm font-medium text-[#2E3035]">
-                                {row.mart_name ? `${row.mart_name} (${row.mart_code})` : row.mart_code}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => removeBulkRow(row.mart_code)}
-                                className="text-xs text-[#B83232] hover:underline"
-                              >
-                                제거
-                              </button>
-                            </div>
-                            <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
-                              {CREATIVE_OPTIONS.map((creative) => {
-                                const isChecked = row.selected_creatives.includes(creative.value);
-                                return (
-                                  <button
-                                    type="button"
-                                    key={`${row.mart_code}-${creative.value}`}
-                                    onClick={() => toggleRowCreative(row.mart_code, creative.value)}
-                                    className={`rounded-lg border px-2 py-1.5 text-[11px] ${
-                                      isChecked
-                                        ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
-                                        : "border-[#E0E1E3] bg-white text-[#2E3035]"
-                                    }`}
-                                  >
-                                    {creative.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <input
-                              type="text"
-                              value={row.custom_creatives_input}
-                              onChange={(event) =>
-                                updateRowCustomCreatives(row.mart_code, event.target.value)
-                              }
-                              placeholder="이 마트 전용 추가 소재 (쉼표 구분)"
-                              className="mt-2 w-full rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs outline-none focus:border-[#FF6D33]"
-                            />
-                            <p className="mt-1 text-[11px] text-[#6B6E75]">
-                              생성 소재: {rowCreatives.length > 0 ? rowCreatives.join(", ") : "선택 없음"}
-                            </p>
-                          </div>
-                        );
-                      })}
+                  <section className="space-y-2 rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-[#CC3A00]">STEP 3. 마트별 소재 개별 설정</p>
+                      <span className="rounded-full bg-[#F4F4F5] px-2 py-0.5 text-[11px] text-[#6B6E75]">
+                        선택 마트 {bulkRows.length}개
+                      </span>
                     </div>
-                  )}
+                    {bulkRows.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-[#E0E1E3] bg-[#F8F8F9] px-3 py-4 text-center text-xs text-[#6B6E75]">
+                        STEP 1에서 마트를 먼저 추가하세요.
+                      </p>
+                    ) : (
+                      <div className="max-h-80 space-y-2 overflow-auto rounded-xl border border-[#E0E1E3] bg-[#F8F8F9] p-3">
+                        {bulkRows.map((row) => {
+                          const rowCreatives = buildCreativeList(
+                            row.selected_creatives,
+                            row.custom_creatives_input,
+                          );
+                          return (
+                            <div key={row.mart_code} className="rounded-lg border border-[#E0E1E3] bg-white p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-sm font-medium text-[#2E3035]">
+                                  {row.mart_name ? `${row.mart_name} (${row.mart_code})` : row.mart_code}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => removeBulkRow(row.mart_code)}
+                                  className="text-xs text-[#B83232] hover:underline"
+                                >
+                                  제거
+                                </button>
+                              </div>
+                              <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
+                                {CREATIVE_OPTIONS.map((creative) => {
+                                  const isChecked = row.selected_creatives.includes(creative.value);
+                                  return (
+                                    <button
+                                      type="button"
+                                      key={`${row.mart_code}-${creative.value}`}
+                                      onClick={() => toggleRowCreative(row.mart_code, creative.value)}
+                                      className={`rounded-lg border px-2 py-1.5 text-[11px] ${
+                                        isChecked
+                                          ? "border-[#FF6D33] bg-[#FFF0EB] text-[#CC3A00]"
+                                          : "border-[#E0E1E3] bg-white text-[#2E3035]"
+                                      }`}
+                                    >
+                                      {creative.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <input
+                                type="text"
+                                value={row.custom_creatives_input}
+                                onChange={(event) =>
+                                  updateRowCustomCreatives(row.mart_code, event.target.value)
+                                }
+                                placeholder="이 마트 전용 추가 소재 (쉼표 구분)"
+                                className="mt-2 w-full rounded-lg border border-[#E0E1E3] bg-[#F8F8F9] px-2 py-1.5 text-xs outline-none focus:border-[#FF6D33]"
+                              />
+                              <p className="mt-1 text-[11px] text-[#6B6E75]">
+                                생성 소재: {rowCreatives.length > 0 ? rowCreatives.join(", ") : "선택 없음"}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
 
-                  <p className="text-xs text-[#6B6E75]">
-                    예상 생성 건수:{" "}
-                    <span className="font-semibold text-[#CC3A00]">{bulkRequestedCount}</span>
-                  </p>
+                  <section className="space-y-2 rounded-xl border border-[#E0E1E3] bg-white p-3">
+                    <p className="text-xs font-semibold text-[#CC3A00]">STEP 4. 실행</p>
+                    <p className="text-xs text-[#6B6E75]">
+                      예상 생성 건수:{" "}
+                      <span className="font-semibold text-[#CC3A00]">{bulkRequestedCount}</span>
+                    </p>
 
                   <button
                     type="button"
                     onClick={handleBulkCreateLinks}
                     disabled={isBulkSubmitting || isSubmitting || isSyncingMarts}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#00724C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#004D33] disabled:cursor-not-allowed disabled:bg-[#66C2A0]"
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
                   >
                     {isBulkSubmitting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
                     대량 링크 생성
                   </button>
+                  </section>
 
                   {bulkSummary ? (
                     <div className="rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-xs text-[#2E3035]">
