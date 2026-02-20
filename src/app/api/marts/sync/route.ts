@@ -14,6 +14,75 @@ type SyncRecord = {
   manager_tel: string | null;
 };
 
+type SupabaseResult<T> = {
+  data: T | null;
+  error: { message: string } | null;
+};
+
+export const maxDuration = 60;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function isTransientFetchError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("fetch failed") ||
+    lower.includes("etimedout") ||
+    lower.includes("econnreset") ||
+    lower.includes("network") ||
+    lower.includes("socket")
+  );
+}
+
+function isDuplicateCodeError(message: string) {
+  return (
+    message.includes("marts_code_key") ||
+    message.includes("duplicate key value violates unique constraint")
+  );
+}
+
+function isSchemaColumnMissing(message: string) {
+  return message.includes("Could not find the");
+}
+
+async function runSupabaseWithRetry<T>(
+  actionName: string,
+  fn: () => PromiseLike<SupabaseResult<T>>,
+  retries = 2,
+): Promise<SupabaseResult<T>> {
+  let lastResult: SupabaseResult<T> | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const result = await fn();
+    lastResult = result;
+
+    if (!result.error) {
+      return result;
+    }
+
+    if (!isTransientFetchError(result.error.message) || attempt === retries) {
+      return result;
+    }
+
+    const delay = 350 * Math.pow(2, attempt);
+    console.warn(
+      `[marts/sync] transient error on ${actionName}, retry ${attempt + 1}/${retries} in ${delay}ms: ${result.error.message}`,
+    );
+    await sleep(delay);
+  }
+
+  return (
+    lastResult ?? {
+      data: null,
+      error: { message: `${actionName} failed` },
+    }
+  );
+}
+
 function dedupeByMartId(records: SyncRecord[]) {
   const byMartId = new Map<number, SyncRecord>();
   let dropped = 0;
@@ -118,42 +187,7 @@ export async function POST() {
     const { records: uniqueBatchRecords, adjustedCount: adjustedInBatch } =
       ensureUniqueCodesInBatch(dedupedByMartIdRecords);
 
-    const { data: existingRows, error: existingRowsError } = await client
-      .from("marts")
-      .select("mart_id, code");
-
-    if (existingRowsError) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: "기존 marts 조회 실패",
-          detail: existingRowsError.message,
-        },
-        { status: 500 },
-      );
-    }
-
-    const reservedCodes = new Set<string>();
-    const codeByMartId = new Map<number, string>();
-    for (const row of existingRows ?? []) {
-      if (row.code) {
-        reservedCodes.add(row.code);
-      }
-      if (typeof row.mart_id === "number" && row.code) {
-        codeByMartId.set(row.mart_id, row.code);
-      }
-    }
-
-    const { records: normalizedRecords, adjustedCount: adjustedAgainstDb } =
-      ensureCodesNotCollidingWithDb(uniqueBatchRecords, reservedCodes, codeByMartId);
-
-    if (adjustedInBatch + adjustedAgainstDb + dropped > 0) {
-      console.warn(
-        `[marts/sync] normalized records (droppedByMartId=${dropped}, adjustedInBatch=${adjustedInBatch}, adjustedAgainstDb=${adjustedAgainstDb})`,
-      );
-    }
-
-    if (normalizedRecords.length === 0) {
+    if (uniqueBatchRecords.length === 0) {
       return NextResponse.json({
         success: true,
         summary: {
@@ -165,14 +199,65 @@ export async function POST() {
     }
 
     let upserted = 0;
+    let adjustedAgainstDb = 0;
 
-    const { data: byMartIdData, error: upsertError } = await client
-      .from("marts")
-      .upsert(normalizedRecords, { onConflict: "mart_id" })
-      .select("mart_id");
+    const firstUpsert = await runSupabaseWithRetry("marts upsert(first)", () =>
+      client
+        .from("marts")
+        .upsert(uniqueBatchRecords, { onConflict: "mart_id" })
+        .select("mart_id"),
+    );
 
-    if (upsertError) {
-      const schemaColumnMissing = upsertError.message.includes("Could not find the");
+    let finalUpsert = firstUpsert;
+
+    if (firstUpsert.error && isDuplicateCodeError(firstUpsert.error.message)) {
+      const existingRowsResult = await runSupabaseWithRetry("marts select(existing)", () =>
+        client.from("marts").select("mart_id, code"),
+      );
+
+      if (existingRowsResult.error) {
+        const isNetwork = isTransientFetchError(existingRowsResult.error.message);
+        return NextResponse.json(
+          {
+            success: false,
+            message: "기존 marts 조회 실패",
+            detail: isNetwork
+              ? `${existingRowsResult.error.message} | 일시적 네트워크 오류 가능성이 높습니다. 잠시 후 다시 시도해 주세요.`
+              : existingRowsResult.error.message,
+          },
+          { status: 500 },
+        );
+      }
+
+      const reservedCodes = new Set<string>();
+      const codeByMartId = new Map<number, string>();
+      for (const row of existingRowsResult.data ?? []) {
+        if (row.code) {
+          reservedCodes.add(row.code);
+        }
+        if (typeof row.mart_id === "number" && row.code) {
+          codeByMartId.set(row.mart_id, row.code);
+        }
+      }
+
+      const normalizedWithDb = ensureCodesNotCollidingWithDb(
+        uniqueBatchRecords,
+        reservedCodes,
+        codeByMartId,
+      );
+      adjustedAgainstDb = normalizedWithDb.adjustedCount;
+
+      finalUpsert = await runSupabaseWithRetry("marts upsert(second)", () =>
+        client
+          .from("marts")
+          .upsert(normalizedWithDb.records, { onConflict: "mart_id" })
+          .select("mart_id"),
+      );
+    }
+
+    if (finalUpsert.error) {
+      const schemaColumnMissing = isSchemaColumnMissing(finalUpsert.error.message);
+      const isNetwork = isTransientFetchError(finalUpsert.error.message);
 
       return NextResponse.json(
         {
@@ -182,13 +267,21 @@ export async function POST() {
             : "마트 upsert 실패",
           detail: schemaColumnMissing
             ? "Supabase SQL Editor에서 supabase_marts_migration.sql 실행 후 다시 시도하세요."
-            : `${upsertError.message} | hint: marts에 mart_id/code가 서로 다른 기존 row에 교차 점유되어 있으면 DB 정리 필요`,
+            : isNetwork
+              ? `${finalUpsert.error.message} | 일시적 네트워크 오류 가능성이 높습니다. 잠시 후 다시 시도해 주세요.`
+              : `${finalUpsert.error.message} | hint: marts에 mart_id/code가 서로 다른 기존 row에 교차 점유되어 있으면 DB 정리 필요`,
         },
         { status: schemaColumnMissing ? 400 : 500 },
       );
     }
 
-    upserted = byMartIdData?.length ?? normalizedRecords.length;
+    if (adjustedInBatch + adjustedAgainstDb + dropped > 0) {
+      console.warn(
+        `[marts/sync] normalized records (droppedByMartId=${dropped}, adjustedInBatch=${adjustedInBatch}, adjustedAgainstDb=${adjustedAgainstDb})`,
+      );
+    }
+
+    upserted = finalUpsert.data?.length ?? uniqueBatchRecords.length;
 
     return NextResponse.json({
       success: true,
