@@ -25,6 +25,7 @@ npm run dev
 - `ACCESS_GATE_CODE` (선택: 코드 입장 게이트 활성화)
 - `ACCESS_GATE_TTL_DAYS` (선택: 코드 인증 유지일, 기본 30)
 - `ADMIN_CLEAR_KEY` (선택: 최근 생성 이력 초기화 버튼 관리자 키)
+- `CRON_SECRET` (권장: Vercel Cron 보호용)
 
 ### GOOGLE_PRIVATE_KEY 주의
 
@@ -48,3 +49,11 @@ GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\
 - Vercel 배포 후 환경변수는 Vercel Project Settings에 동일하게 등록
 - 팀 공유 시 `ACCESS_GATE_CODE`를 설정해 링크 유출 리스크를 낮추세요
 - 필요 시 코드 주기적 변경(주간/월간) 권장
+
+## 자동 마트 동기화 (Vercel Cron)
+
+- `vercel.json`의 cron 설정으로 `/api/cron/marts-sync`를 자동 호출합니다.
+- 현재 스케줄: `15 1 */3 * *` (UTC 기준 3일마다 01:15, KST 10:15)
+- 반드시 Vercel 환경변수에 `CRON_SECRET` 설정 필요
+  - Vercel Cron은 `Authorization: Bearer <CRON_SECRET>` 헤더로 요청하고,
+  - 서버는 해당 헤더가 일치할 때만 동기화를 실행합니다.
