@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
 import {
   BarChart3,
@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 import { format } from "date-fns";
 
@@ -210,6 +211,10 @@ function buildIllustratorSafeQrSvg(value: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><path d="${path.join("")}" fill="#000000"/></svg>`;
 }
 
+function buildReportPanelAnchorId(shortUrl: string) {
+  return `link-report-panel-${encodeURIComponent(shortUrl)}`;
+}
+
 export default function Home() {
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [martQuery, setMartQuery] = useState("");
@@ -242,6 +247,7 @@ export default function Home() {
 
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
   const [selectedLinkReport, setSelectedLinkReport] = useState<LinkReportResponse["data"] | null>(null);
+  const [selectedReportShortUrl, setSelectedReportShortUrl] = useState<string | null>(null);
   const [copyToast, setCopyToast] = useState("");
   const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
 
@@ -450,6 +456,7 @@ export default function Home() {
       }
 
       setSelectedLinkReport(null);
+      setSelectedReportShortUrl(null);
       await loadRecentLinks();
       setCopyToast(`최근 생성 이력 ${payload.summary?.deleted ?? 0}건 삭제 완료`);
       window.setTimeout(() => setCopyToast(""), 1600);
@@ -749,14 +756,38 @@ export default function Home() {
   };
 
   const handleLoadLinkReport = async (link: LinkRow) => {
+    if (reportTargetShortUrl === link.short_url) {
+      return;
+    }
+
+    if (
+      selectedReportShortUrl === link.short_url &&
+      reportTargetShortUrl !== link.short_url &&
+      !isReportLoading
+    ) {
+      setSelectedReportShortUrl(null);
+      setSelectedLinkReport(null);
+      return;
+    }
+
+    setSelectedReportShortUrl(link.short_url);
+    setSelectedLinkReport((current) =>
+      current?.tracking_link.short_url === link.short_url ? current : null,
+    );
     setIsReportLoading(true);
     setReportTargetShortUrl(link.short_url);
     setErrorMessage(null);
 
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(buildReportPanelAnchorId(link.short_url))
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    });
+
     try {
       let taskId: string | null = null;
 
-      for (let attempt = 0; attempt < 20; attempt += 1) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
         const params = new URLSearchParams();
         params.set("short_url", link.short_url);
         if (link.airbridge_link_id) params.set("airbridge_link_id", link.airbridge_link_id);
@@ -783,7 +814,9 @@ export default function Home() {
           return;
         }
 
-        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        await new Promise((resolve) =>
+          window.setTimeout(resolve, Math.min(500 + attempt * 250, 1400)),
+        );
       }
     } finally {
       setIsReportLoading(false);
@@ -837,9 +870,18 @@ export default function Home() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (!selectedReportShortUrl) return;
+    const reportStillVisible = links.some((link) => link.short_url === selectedReportShortUrl);
+    if (!reportStillVisible) {
+      setSelectedReportShortUrl(null);
+      setSelectedLinkReport(null);
+    }
+  }, [links, selectedReportShortUrl]);
+
   return (
     <main className="qmk-surface min-h-screen text-[#121417]">
-      {isSyncingMarts || isReportLoading || isClearingLinks || isBulkSubmitting ? (
+      {isSyncingMarts || isClearingLinks || isBulkSubmitting ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center bg-black/10 p-6 sm:items-start">
           <div className="inline-flex items-center gap-2 rounded-full border border-[#E0E1E3] bg-white px-4 py-2 text-sm font-medium shadow-xl">
             <RefreshCw className="h-4 w-4 animate-spin text-[#FF4800]" />
@@ -847,9 +889,9 @@ export default function Home() {
               ? "마트 데이터 동기화 중..."
               : isBulkSubmitting
                 ? "대량 링크 생성 중..."
-              : isClearingLinks
-                ? "최근 생성 이력 초기화 중..."
-                : "Airbridge 리포트 불러오는 중..."}
+                : isClearingLinks
+                  ? "최근 생성 이력 초기화 중..."
+                  : "처리 중..."}
           </div>
         </div>
       ) : null}
@@ -1399,7 +1441,10 @@ export default function Home() {
 
         <section className="mt-6 rounded-2xl border border-[#E0E1E3] bg-white/95 p-5 shadow-[0_8px_24px_rgba(18,20,23,0.05)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold">최근 생성 이력</h2>
+            <div>
+              <h2 className="text-lg font-semibold">최근 생성 이력</h2>
+              <p className="mt-1 text-xs text-[#6B6E75]">리포트는 선택한 생성 이력 바로 아래에서 펼쳐집니다.</p>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1487,131 +1532,233 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {links.map((link, index) => (
-                    <tr key={`${link.campaign_name}-${index}`} className="border-b border-[#F1F1F2] hover:bg-[#FFF0EB]/60">
-                      <td className="px-2 py-2 text-[#6B6E75]">{format(new Date(link.created_at), "yyyy-MM-dd HH:mm:ss")}</td>
-                      <td className="px-2 py-2">{link.mart_code}</td>
-                      <td className="px-2 py-2 font-medium">{link.campaign_name}</td>
-                      <td className="px-2 py-2"><a href={link.short_url} target="_blank" rel="noreferrer" className="text-[#3182CE] hover:underline">{link.short_url}</a></td>
-                      <td className="px-2 py-2">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => void handleDownloadHistoryQr(link.short_url, link.campaign_name, "png")}
-                            className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#66C2A0] hover:bg-[#E6F5EF]"
-                          >
-                            <Download className="h-3.5 w-3.5" /> PNG
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void handleDownloadHistoryQr(link.short_url, link.campaign_name, "svg")}
-                            className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#FFD580] hover:bg-[#FFF5E0]"
-                          >
-                            <Download className="h-3.5 w-3.5" /> SVG
-                          </button>
-                        </div>
-                      </td>
-                      <td className="px-2 py-2">
-                        <button
-                          type="button"
-                          onClick={() => handleLoadLinkReport(link)}
-                          disabled={isReportLoading}
-                          className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2.5 py-1.5 text-xs hover:-translate-y-[1px] hover:border-[#FF9E73] hover:bg-[#FFF0EB] disabled:cursor-not-allowed disabled:opacity-60"
+                  {links.map((link, index) => {
+                    const isExpanded = selectedReportShortUrl === link.short_url;
+                    const isLoadingThisReport =
+                      isReportLoading && reportTargetShortUrl === link.short_url;
+                    const reportForRow =
+                      selectedLinkReport?.tracking_link.short_url === link.short_url
+                        ? selectedLinkReport
+                        : null;
+
+                    return (
+                      <Fragment key={`${link.campaign_name}-${index}`}>
+                        <tr
+                          className={`border-b border-[#F1F1F2] transition-colors ${
+                            isExpanded ? "bg-[#FFF8F3]" : "hover:bg-[#FFF0EB]/60"
+                          }`}
                         >
-                          {isReportLoading && reportTargetShortUrl === link.short_url ? (
-                            <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <BarChart3 className="h-3.5 w-3.5" />
-                          )}
-                          {isReportLoading && reportTargetShortUrl === link.short_url ? "조회 중..." : "리포트 보기"}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                          <td className="px-2 py-2 text-[#6B6E75]">
+                            {format(new Date(link.created_at), "yyyy-MM-dd HH:mm:ss")}
+                          </td>
+                          <td className="px-2 py-2">{link.mart_code}</td>
+                          <td className="px-2 py-2 font-medium">{link.campaign_name}</td>
+                          <td className="px-2 py-2">
+                            <a
+                              href={link.short_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[#3182CE] hover:underline"
+                            >
+                              {link.short_url}
+                            </a>
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleDownloadHistoryQr(
+                                    link.short_url,
+                                    link.campaign_name,
+                                    "png",
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#66C2A0] hover:bg-[#E6F5EF]"
+                              >
+                                <Download className="h-3.5 w-3.5" /> PNG
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void handleDownloadHistoryQr(
+                                    link.short_url,
+                                    link.campaign_name,
+                                    "svg",
+                                  )
+                                }
+                                className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-2 py-1.5 text-xs hover:border-[#FFD580] hover:bg-[#FFF5E0]"
+                              >
+                                <Download className="h-3.5 w-3.5" /> SVG
+                              </button>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2">
+                            <button
+                              type="button"
+                              onClick={() => handleLoadLinkReport(link)}
+                              disabled={isReportLoading && !isLoadingThisReport}
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs transition ${
+                                isExpanded
+                                  ? "border-[#FF9E73] bg-[#FFF0EB] text-[#CC3A00]"
+                                  : "border-[#E0E1E3] bg-white hover:-translate-y-[1px] hover:border-[#FF9E73] hover:bg-[#FFF0EB]"
+                              } disabled:cursor-not-allowed disabled:opacity-60`}
+                            >
+                              {isLoadingThisReport ? (
+                                <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                              ) : isExpanded ? (
+                                <X className="h-3.5 w-3.5" />
+                              ) : (
+                                <BarChart3 className="h-3.5 w-3.5" />
+                              )}
+                              {isLoadingThisReport ? "조회 중..." : isExpanded ? "접기" : "리포트 보기"}
+                            </button>
+                          </td>
+                        </tr>
+                        {isExpanded ? (
+                          <tr
+                            id={buildReportPanelAnchorId(link.short_url)}
+                            className="border-b border-[#F1F1F2] bg-[#FFF8F3]"
+                          >
+                            <td colSpan={6} className="px-3 pb-4 pt-1">
+                              <div className="rounded-2xl border border-[#FFD8C7] bg-gradient-to-br from-[#FFFFFF] to-[#FFF5E0] p-4 shadow-[0_10px_30px_rgba(255,72,0,0.08)]">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[#FF6D33]">
+                                      Airbridge Report
+                                    </p>
+                                    <h3 className="mt-1 text-base font-semibold text-[#121417]">
+                                      {link.campaign_name}
+                                    </h3>
+                                    <p className="mt-1 break-all text-xs text-[#6B6E75]">
+                                      {link.short_url}
+                                    </p>
+                                  </div>
+                                  {reportForRow ? (
+                                    <span
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                        reportForRow.report_status === "SUCCESS"
+                                          ? "bg-[#E6F5EF] text-[#004D33]"
+                                          : reportForRow.report_status === "PENDING"
+                                            ? "bg-[#FFF5E0] text-[#CC8200]"
+                                            : "bg-[#FDECEC] text-[#B83232]"
+                                      }`}
+                                    >
+                                      {reportForRow.report_status}
+                                    </span>
+                                  ) : null}
+                                </div>
+
+                                {isLoadingThisReport && !reportForRow ? (
+                                  <div className="mt-4 space-y-3">
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                                      {Array.from({ length: 5 }).map((_, skeletonIndex) => (
+                                        <div
+                                          key={skeletonIndex}
+                                          className="h-20 animate-pulse rounded-xl bg-[#F4F4F5]"
+                                        />
+                                      ))}
+                                    </div>
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                                      {Array.from({ length: 5 }).map((_, skeletonIndex) => (
+                                        <div
+                                          key={`meta-${skeletonIndex}`}
+                                          className="h-16 animate-pulse rounded-xl bg-[#F4F4F5]"
+                                        />
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : reportForRow ? (
+                                  <div className="mt-4 space-y-4 text-sm">
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                                      {[
+                                        { label: "Clicks", value: reportForRow.report_metrics.clicks },
+                                        {
+                                          label: "Impressions",
+                                          value: reportForRow.report_metrics.impressions,
+                                        },
+                                        {
+                                          label: "Installs (App)",
+                                          value: reportForRow.report_metrics.app_installs,
+                                        },
+                                        {
+                                          label: "Deeplink Opens (App)",
+                                          value: reportForRow.report_metrics.app_deeplink_opens,
+                                        },
+                                        {
+                                          label: "Opens (Web)",
+                                          value: reportForRow.report_metrics.web_opens,
+                                        },
+                                      ].map((metric) => (
+                                        <div
+                                          key={metric.label}
+                                          className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-3 shadow-[0_2px_8px_rgba(18,20,23,0.04)]"
+                                        >
+                                          <p className="text-[11px] text-[#6B6E75]">{metric.label}</p>
+                                          <p className="mt-1 text-lg font-bold text-[#121417]">
+                                            {metric.value ?? "N/A"}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+
+                                    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                                      {[
+                                        {
+                                          label: "Channel Type",
+                                          value: reportForRow.report_dimensions.channel_type,
+                                        },
+                                        {
+                                          label: "Channel",
+                                          value: reportForRow.report_dimensions.channel,
+                                        },
+                                        {
+                                          label: "Campaign",
+                                          value: reportForRow.report_dimensions.campaign,
+                                        },
+                                        {
+                                          label: "Ad Group",
+                                          value: reportForRow.report_dimensions.ad_group,
+                                        },
+                                        {
+                                          label: "Ad Creative",
+                                          value: reportForRow.report_dimensions.ad_creative,
+                                        },
+                                      ].map((dimension) => (
+                                        <div
+                                          key={dimension.label}
+                                          className="rounded-xl border border-[#E0E1E3] bg-white p-3"
+                                        >
+                                          <p className="text-xs text-[#6B6E75]">{dimension.label}</p>
+                                          <p className="mt-1 break-all font-medium text-[#121417]">
+                                            {dimension.value ?? "N/A"}
+                                          </p>
+                                        </div>
+                                      ))}
+                                    </div>
+
+                                    {reportForRow.report_message ? (
+                                      <div className="rounded-xl border border-[#FFD580] bg-[#FFF5E0] px-3 py-2 text-xs text-[#CC8200]">
+                                        {reportForRow.report_message}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <p className="mt-3 text-sm text-[#6B6E75]">
+                                    리포트를 불러오지 못했습니다. 다시 시도해 주세요.
+                                  </p>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
-
-          <div className="mt-5 rounded-2xl border border-[#E0E1E3] bg-gradient-to-br from-[#FFFFFF] to-[#FFF5E0] p-4 shadow-[0_10px_30px_rgba(255,72,0,0.08)]">
-            <h3 className="text-base font-semibold">선택 링크 리포트 (Airbridge)</h3>
-            {isReportLoading ? (
-              <div className="mt-3 space-y-3">
-                <div className="h-12 animate-pulse rounded-xl bg-[#F4F4F5]" />
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                  {Array.from({ length: 5 }).map((_, index) => (
-                    <div key={index} className="h-20 animate-pulse rounded-xl bg-[#F4F4F5]" />
-                  ))}
-                </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {Array.from({ length: 6 }).map((_, index) => (
-                    <div key={index} className="h-16 animate-pulse rounded-xl bg-[#F4F4F5]" />
-                  ))}
-                </div>
-              </div>
-            ) : !selectedLinkReport ? (
-              <p className="mt-2 text-sm text-[#6B6E75]">이력에서 [리포트 보기]를 클릭하세요.</p>
-            ) : (
-              <div className="mt-3 space-y-4 text-sm">
-                <div className="rounded-xl border border-[#E0E1E3] bg-white/90 p-3">
-                  <p className="text-xs uppercase tracking-wide text-[#6B6E75]">Short URL</p>
-                  <p className="mt-1 break-all font-medium text-[#2E3035]">{selectedLinkReport.tracking_link.short_url}</p>
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-                  {[
-                    { label: "Clicks", value: selectedLinkReport.report_metrics.clicks },
-                    { label: "Impressions", value: selectedLinkReport.report_metrics.impressions },
-                    { label: "Installs (App)", value: selectedLinkReport.report_metrics.app_installs },
-                    { label: "Deeplink Opens (App)", value: selectedLinkReport.report_metrics.app_deeplink_opens },
-                    { label: "Opens (Web)", value: selectedLinkReport.report_metrics.web_opens },
-                  ].map((metric) => (
-                    <div key={metric.label} className="rounded-xl border border-[#E0E1E3] bg-white px-3 py-2 shadow-[0_2px_8px_rgba(18,20,23,0.04)]">
-                      <p className="text-[11px] text-[#6B6E75]">{metric.label}</p>
-                      <p className="mt-1 text-lg font-bold text-[#121417]">{metric.value ?? "N/A"}</p>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Channel Type</p>
-                    <p className="mt-1 font-medium">{selectedLinkReport.report_dimensions.channel_type ?? "N/A"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Channel</p>
-                    <p className="mt-1 font-medium">{selectedLinkReport.report_dimensions.channel ?? "N/A"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Campaign</p>
-                    <p className="mt-1 break-all font-medium">{selectedLinkReport.report_dimensions.campaign ?? "N/A"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Ad Group</p>
-                    <p className="mt-1 break-all font-medium">{selectedLinkReport.report_dimensions.ad_group ?? "N/A"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Ad Creative</p>
-                    <p className="mt-1 font-medium">{selectedLinkReport.report_dimensions.ad_creative ?? "N/A"}</p>
-                  </div>
-                  <div className="rounded-xl border border-[#E0E1E3] bg-white p-3">
-                    <p className="text-xs text-[#6B6E75]">Status</p>
-                    <p className={`mt-1 font-semibold ${
-                      selectedLinkReport.report_status === "SUCCESS"
-                        ? "text-[#00724C]"
-                        : selectedLinkReport.report_status === "PENDING"
-                          ? "text-[#CC8200]"
-                          : "text-[#B83232]"
-                    }`}
-                    >
-                      {selectedLinkReport.report_status}
-                    </p>
-                  </div>
-                </div>
-                {selectedLinkReport.report_message ? <p className="text-xs text-[#CC8200]">{selectedLinkReport.report_message}</p> : null}
-              </div>
-            )}
-          </div>
         </section>
       </div>
     </main>

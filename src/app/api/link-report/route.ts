@@ -65,6 +65,9 @@ const REPORT_CACHE_TABLE = "link_report_cache";
 const REPORT_CACHE_SUCCESS_TTL_MS = 15 * 60 * 1000;
 const REPORT_CACHE_PENDING_TTL_MS = 20 * 1000;
 const REPORT_CACHE_FAIL_TTL_MS = 2 * 60 * 1000;
+const INITIAL_REPORT_POLL_ATTEMPTS = 1;
+const FALLBACK_REPORT_POLL_ATTEMPTS = 3;
+const FALLBACK_REPORT_POLL_INTERVAL_MS = 400;
 const reportMetaCache = new Map<string, { expiresAt: number; value: ReportMeta }>();
 
 function toRecord(value: unknown): Record<string, unknown> | null {
@@ -551,7 +554,7 @@ export async function GET(request: NextRequest) {
       if (!(activeTaskId && reportStatus === "UNAVAILABLE" && reportMessage) && activeTaskId) {
         let reportPayload: unknown = null;
         let finalStatus: AirbridgeTask["status"] = "PENDING";
-        const maxPoll = requestedTaskId ? 1 : 2;
+        const maxPoll = requestedTaskId ? 1 : INITIAL_REPORT_POLL_ATTEMPTS;
 
         for (let i = 0; i < maxPoll; i += 1) {
           const polled = await fetchAirbridgeJson(
@@ -566,7 +569,6 @@ export async function GET(request: NextRequest) {
           if (finalStatus === "SUCCESS" || finalStatus === "FAILURE" || finalStatus === "CANCELED") {
             break;
           }
-          await sleep(1000);
         }
 
         if (finalStatus === "SUCCESS") {
@@ -655,7 +657,7 @@ export async function GET(request: NextRequest) {
                 let fallbackPayload: unknown = null;
                 let fallbackStatus: AirbridgeTask["status"] = fallbackTask.status;
 
-                for (let i = 0; i < 20; i += 1) {
+                for (let i = 0; i < FALLBACK_REPORT_POLL_ATTEMPTS; i += 1) {
                   const polledFallback = await fetchAirbridgeJson(
                     `https://api.airbridge.io/reports/api/v7/apps/${encodeURIComponent(appName as string)}/actuals/query/${fallbackTask.taskId}`,
                     { method: "GET" },
@@ -670,7 +672,7 @@ export async function GET(request: NextRequest) {
                   ) {
                     break;
                   }
-                  await sleep(1000);
+                  await sleep(FALLBACK_REPORT_POLL_INTERVAL_MS);
                 }
 
                 if (fallbackStatus === "SUCCESS") {
