@@ -114,6 +114,56 @@ type LinkReportResponse = {
   };
 };
 
+type DashboardMetricSummary = {
+  current: number;
+  previous: number;
+  delta_percentage: number | null;
+};
+
+type DashboardMetricBucket = {
+  clicks: number;
+  impressions: number;
+  app_installs: number;
+  app_deeplink_opens: number;
+  web_opens: number;
+};
+
+type DashboardReportResponse = {
+  success: boolean;
+  message?: string;
+  detail?: string;
+  data?: {
+    channel_name: string;
+    period_days: number;
+    updated_at: string;
+    date_range: {
+      from: string;
+      to: string;
+    };
+    previous_date_range: {
+      from: string;
+      to: string;
+    };
+    summary: {
+      clicks: DashboardMetricSummary;
+      impressions: DashboardMetricSummary;
+      app_installs: DashboardMetricSummary;
+      app_deeplink_opens: DashboardMetricSummary;
+      web_opens: DashboardMetricSummary;
+    };
+    daily: Array<
+      {
+        date: string;
+      } & DashboardMetricBucket
+    >;
+    creatives: Array<
+      {
+        ad_creative: string;
+      } & DashboardMetricBucket
+    >;
+  };
+};
+
 type LinksResponse = {
   success: boolean;
   data?: LinkRow[];
@@ -157,6 +207,18 @@ const CREATIVE_OPTIONS = [
   { value: "sheet", label: "시트지" },
   { value: "wobbler", label: "와블러" },
   { value: "leaflet", label: "리플렛" },
+] as const;
+
+const CREATIVE_LABEL_MAP = Object.fromEntries(
+  CREATIVE_OPTIONS.map((creative) => [creative.value, creative.label]),
+) as Record<string, string>;
+
+const DASHBOARD_METRIC_META = [
+  { key: "clicks", label: "Clicks", tone: "orange" },
+  { key: "app_installs", label: "Installs (App)", tone: "green" },
+  { key: "impressions", label: "Impressions", tone: "yellow" },
+  { key: "app_deeplink_opens", label: "Deeplink Opens (App)", tone: "orange" },
+  { key: "web_opens", label: "Opens (Web)", tone: "blue" },
 ] as const;
 
 const SEARCH_DEBOUNCE_MS = 280;
@@ -215,6 +277,161 @@ function buildReportPanelAnchorId(shortUrl: string) {
   return `link-report-panel-${encodeURIComponent(shortUrl)}`;
 }
 
+function formatMetricNumber(value: number | null | undefined) {
+  return new Intl.NumberFormat("ko-KR").format(value ?? 0);
+}
+
+function formatDashboardDateLabel(value: string) {
+  return value.slice(5).replace("-", ".");
+}
+
+function formatDeltaLabel(value: number | null) {
+  if (value === null) return "신규";
+  if (value === 0) return "변동 없음";
+  return `${value > 0 ? "+" : ""}${value}%`;
+}
+
+function getDeltaToneClass(value: number | null) {
+  if (value === null || value > 0) return "text-[#00724C] bg-[#E6F5EF] border-[#66C2A0]";
+  if (value < 0) return "text-[#B83232] bg-[#FDECEC] border-[#E53E3E]/30";
+  return "text-[#6B6E75] bg-[#F4F4F5] border-[#E0E1E3]";
+}
+
+function buildTrendPath(
+  values: number[],
+  width: number,
+  height: number,
+  padding: number,
+  maxValue: number,
+) {
+  if (values.length === 0) return "";
+  if (values.length === 1) {
+    const y = height - padding - (values[0] / maxValue) * (height - padding * 2);
+    return `M ${padding} ${y}`;
+  }
+
+  return values
+    .map((value, index) => {
+      const x =
+        padding + (index / (values.length - 1)) * (width - padding * 2);
+      const y =
+        height - padding - (value / maxValue) * (height - padding * 2);
+      return `${index === 0 ? "M" : "L"} ${x} ${y}`;
+    })
+    .join(" ");
+}
+
+function DashboardTrendChart({
+  points,
+}: {
+  points: Array<{ date: string; clicks: number; app_installs: number }>;
+}) {
+  const width = 640;
+  const height = 240;
+  const padding = 24;
+  const maxValue = Math.max(
+    1,
+    ...points.flatMap((point) => [point.clicks, point.app_installs]),
+  );
+  const clicksPath = buildTrendPath(
+    points.map((point) => point.clicks),
+    width,
+    height,
+    padding,
+    maxValue,
+  );
+  const installsPath = buildTrendPath(
+    points.map((point) => point.app_installs),
+    width,
+    height,
+    padding,
+    maxValue,
+  );
+  const yGuides = [0.25, 0.5, 0.75];
+
+  return (
+    <div className="rounded-2xl border border-[#E0E1E3] bg-white p-4 shadow-[0_10px_30px_rgba(18,20,23,0.04)]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[#121417]">일자별 추이</p>
+          <p className="mt-1 text-xs text-[#6B6E75]">
+            Clicks와 Installs (App) 흐름을 함께 봅니다.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-[11px] text-[#6B6E75]">
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#FF4800]" />
+            Clicks
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="h-2.5 w-2.5 rounded-full bg-[#00724C]" />
+            Installs (App)
+          </span>
+        </div>
+      </div>
+      <div className="mt-4 overflow-hidden rounded-2xl border border-[#FFF0EB] bg-gradient-to-b from-[#FFF9F5] to-white p-3">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-52 w-full">
+          {yGuides.map((ratio, index) => {
+            const y = padding + (height - padding * 2) * ratio;
+            return (
+              <line
+                key={index}
+                x1={padding}
+                x2={width - padding}
+                y1={y}
+                y2={y}
+                stroke="#F4D6C8"
+                strokeDasharray="4 6"
+              />
+            );
+          })}
+          <path
+            d={clicksPath}
+            fill="none"
+            stroke="#FF4800"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d={installsPath}
+            fill="none"
+            stroke="#00724C"
+            strokeWidth="4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          {points.map((point, index) => {
+            const x =
+              points.length === 1
+                ? width / 2
+                : padding + (index / (points.length - 1)) * (width - padding * 2);
+            const clicksY =
+              height -
+              padding -
+              (point.clicks / maxValue) * (height - padding * 2);
+            const installsY =
+              height -
+              padding -
+              (point.app_installs / maxValue) * (height - padding * 2);
+            return (
+              <g key={point.date}>
+                <circle cx={x} cy={clicksY} r="4.5" fill="#FF4800" />
+                <circle cx={x} cy={installsY} r="4.5" fill="#00724C" />
+              </g>
+            );
+          })}
+        </svg>
+        <div className="mt-2 flex items-center justify-between text-[11px] text-[#6B6E75]">
+          <span>{points[0] ? formatDashboardDateLabel(points[0].date) : "-"}</span>
+          <span>{points[Math.floor(points.length / 2)] ? formatDashboardDateLabel(points[Math.floor(points.length / 2)].date) : "-"}</span>
+          <span>{points[points.length - 1] ? formatDashboardDateLabel(points[points.length - 1].date) : "-"}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [martQuery, setMartQuery] = useState("");
@@ -248,6 +465,9 @@ export default function Home() {
   const [syncSummary, setSyncSummary] = useState<SyncSummary | null>(null);
   const [selectedLinkReport, setSelectedLinkReport] = useState<LinkReportResponse["data"] | null>(null);
   const [selectedReportShortUrl, setSelectedReportShortUrl] = useState<string | null>(null);
+  const [dashboardPeriod, setDashboardPeriod] = useState<"7d" | "30d">("30d");
+  const [dashboardReport, setDashboardReport] =
+    useState<DashboardReportResponse["data"] | null>(null);
   const [copyToast, setCopyToast] = useState("");
   const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
 
@@ -255,12 +475,14 @@ export default function Home() {
   const [isMartsLoadingMore, setIsMartsLoadingMore] = useState(false);
   const [isLinksLoading, setIsLinksLoading] = useState(false);
   const [isMartStatsLoading, setIsMartStatsLoading] = useState(false);
+  const [isDashboardLoading, setIsDashboardLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSyncingMarts, setIsSyncingMarts] = useState(false);
   const [isReportLoading, setIsReportLoading] = useState(false);
   const [isClearingLinks, setIsClearingLinks] = useState(false);
   const [reportTargetShortUrl, setReportTargetShortUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyCreativeFilter, setHistoryCreativeFilter] = useState("all");
   const [historyDateFrom, setHistoryDateFrom] = useState("");
@@ -285,6 +507,21 @@ export default function Home() {
         return sum + creatives.length;
       }, 0),
     [bulkRows],
+  );
+
+  const dashboardTrendPoints = useMemo(
+    () =>
+      (dashboardReport?.daily ?? []).map((item) => ({
+        date: item.date,
+        clicks: item.clicks,
+        app_installs: item.app_installs,
+      })),
+    [dashboardReport?.daily],
+  );
+
+  const dashboardTopCreatives = useMemo(
+    () => (dashboardReport?.creatives ?? []).slice(0, 6),
+    [dashboardReport?.creatives],
   );
 
   const loadRecentLinks = useCallback(async () => {
@@ -407,6 +644,28 @@ export default function Home() {
     }
 
     setMartStats(payload.data);
+  }, []);
+
+  const loadDashboardReport = useCallback(async (period: "7d" | "30d") => {
+    setIsDashboardLoading(true);
+    setDashboardError(null);
+
+    try {
+      const response = await fetch(`/api/dashboard-report?period=${period}`);
+      const payload = (await response.json()) as DashboardReportResponse;
+
+      if (!response.ok || !payload.success || !payload.data) {
+        setDashboardReport(null);
+        setDashboardError(
+          `대시보드 리포트 로드 실패: ${payload.message ?? "unknown error"}${payload.detail ? ` (${payload.detail})` : ""}`,
+        );
+        return;
+      }
+
+      setDashboardReport(payload.data);
+    } finally {
+      setIsDashboardLoading(false);
+    }
   }, []);
 
   const handleSyncMarts = async () => {
@@ -845,6 +1104,10 @@ export default function Home() {
   }, [loadMartStats]);
 
   useEffect(() => {
+    void loadDashboardReport(dashboardPeriod);
+  }, [dashboardPeriod, loadDashboardReport]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       setHistoryQueryDebounced(historyQuery.trim());
     }, HISTORY_SEARCH_DEBOUNCE_MS);
@@ -957,6 +1220,170 @@ export default function Home() {
         {errorMessage ? (
           <section className="mt-4 rounded-xl border border-[#E53E3E]/40 bg-[#FDECEC] px-3 py-2 text-sm text-[#B83232]">{errorMessage}</section>
         ) : null}
+
+        <section className="mt-6 rounded-3xl border border-[#E0E1E3] bg-[radial-gradient(circle_at_top_left,_rgba(255,72,0,0.12),_transparent_35%),linear-gradient(135deg,#fff7f1_0%,#ffffff_45%,#fff5e0_100%)] p-5 shadow-[0_14px_40px_rgba(18,20,23,0.08)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#FF6D33]">
+                Offline Performance
+              </p>
+              <h2 className="mt-2 text-xl font-bold text-[#121417]">
+                오프라인 출력물 주간/월간 성과
+              </h2>
+              <p className="mt-1 text-sm text-[#6B6E75]">
+                Airbridge 채널 <span className="font-semibold text-[#2E3035]">{dashboardReport?.channel_name ?? "offline-qr"}</span> 기준 전체 마트 성과입니다.
+              </p>
+            </div>
+            <div className="inline-flex rounded-2xl border border-[#E0E1E3] bg-white/80 p-1 text-sm shadow-[0_8px_20px_rgba(18,20,23,0.04)]">
+              <button
+                type="button"
+                onClick={() => setDashboardPeriod("7d")}
+                className={`rounded-xl px-3 py-2 ${
+                  dashboardPeriod === "7d"
+                    ? "bg-[#121417] font-semibold text-white"
+                    : "text-[#6B6E75]"
+                }`}
+              >
+                최근 7일
+              </button>
+              <button
+                type="button"
+                onClick={() => setDashboardPeriod("30d")}
+                className={`rounded-xl px-3 py-2 ${
+                  dashboardPeriod === "30d"
+                    ? "bg-[#121417] font-semibold text-white"
+                    : "text-[#6B6E75]"
+                }`}
+              >
+                최근 30일
+              </button>
+            </div>
+          </div>
+
+          {isDashboardLoading ? (
+            <div className="mt-5 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <div key={index} className="h-28 animate-pulse rounded-2xl bg-white/80" />
+                ))}
+              </div>
+              <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+                <div className="h-80 animate-pulse rounded-2xl bg-white/80" />
+                <div className="h-80 animate-pulse rounded-2xl bg-white/80" />
+              </div>
+            </div>
+          ) : dashboardError ? (
+            <div className="mt-5 rounded-2xl border border-[#E53E3E]/30 bg-[#FDECEC] px-4 py-3 text-sm text-[#B83232]">
+              {dashboardError}
+            </div>
+          ) : dashboardReport ? (
+            <div className="mt-5 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                {DASHBOARD_METRIC_META.map((item) => {
+                  const metric = dashboardReport.summary[item.key];
+                  const toneClasses =
+                    item.tone === "green"
+                      ? "from-[#E6F5EF] to-white border-[#66C2A0]"
+                      : item.tone === "yellow"
+                        ? "from-[#FFF5E0] to-white border-[#FFD580]"
+                        : item.tone === "blue"
+                          ? "from-[#EEF5FF] to-white border-[#BFD8F6]"
+                          : "from-[#FFF0EB] to-white border-[#FF9E73]";
+
+                  return (
+                    <div
+                      key={item.key}
+                      className={`rounded-2xl border bg-gradient-to-br p-4 shadow-[0_10px_24px_rgba(18,20,23,0.04)] ${toneClasses}`}
+                    >
+                      <p className="text-xs uppercase tracking-[0.14em] text-[#6B6E75]">
+                        {item.label}
+                      </p>
+                      <p className="mt-3 text-3xl font-bold text-[#121417]">
+                        {formatMetricNumber(metric.current)}
+                      </p>
+                      <div className="mt-3 flex items-center justify-between gap-2 text-xs">
+                        <span
+                          className={`rounded-full border px-2 py-1 font-semibold ${getDeltaToneClass(metric.delta_percentage)}`}
+                        >
+                          {formatDeltaLabel(metric.delta_percentage)}
+                        </span>
+                        <span className="text-[#6B6E75]">
+                          이전 {formatMetricNumber(metric.previous)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+                <DashboardTrendChart points={dashboardTrendPoints} />
+
+                <div className="rounded-2xl border border-[#E0E1E3] bg-white p-4 shadow-[0_10px_30px_rgba(18,20,23,0.04)]">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-[#121417]">소재별 성과</p>
+                      <p className="mt-1 text-xs text-[#6B6E75]">
+                        {dashboardPeriod === "7d" ? "최근 7일" : "최근 30일"} 기준 상위 소재입니다.
+                      </p>
+                    </div>
+                    <span className="rounded-full border border-[#E0E1E3] bg-[#F8F8F9] px-2.5 py-1 text-[11px] text-[#6B6E75]">
+                      {dashboardReport.date_range.from} ~ {dashboardReport.date_range.to}
+                    </span>
+                  </div>
+
+                  {dashboardTopCreatives.length === 0 ? (
+                    <div className="mt-6 rounded-2xl border border-dashed border-[#E0E1E3] bg-[#F8F8F9] px-4 py-8 text-center text-sm text-[#6B6E75]">
+                      해당 기간 데이터가 없습니다.
+                    </div>
+                  ) : (
+                    <div className="mt-4 space-y-3">
+                      {dashboardTopCreatives.map((creative) => {
+                        const maxClicks = dashboardTopCreatives[0]?.clicks || 1;
+                        const width = Math.max(8, (creative.clicks / maxClicks) * 100);
+                        return (
+                          <div
+                            key={creative.ad_creative}
+                            className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] p-3"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="font-semibold text-[#121417]">
+                                  {CREATIVE_LABEL_MAP[creative.ad_creative] ?? creative.ad_creative}
+                                </p>
+                                <p className="mt-1 text-[11px] text-[#6B6E75]">
+                                  Airbridge key: {creative.ad_creative}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xs text-[#6B6E75]">Clicks</p>
+                                <p className="text-lg font-bold text-[#121417]">
+                                  {formatMetricNumber(creative.clicks)}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-[#FFF0EB]">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-[#FF4800] to-[#FFA300]"
+                                style={{ width: `${width}%` }}
+                              />
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-[#6B6E75]">
+                              <span>Installs {formatMetricNumber(creative.app_installs)}</span>
+                              <span>Impressions {formatMetricNumber(creative.impressions)}</span>
+                              <span>Deeplink {formatMetricNumber(creative.app_deeplink_opens)}</span>
+                              <span>Web Opens {formatMetricNumber(creative.web_opens)}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </section>
 
         <section className="mt-6 grid gap-6 lg:grid-cols-5">
           <div className="rounded-2xl border border-[#E0E1E3] bg-white/95 p-5 shadow-[0_8px_24px_rgba(18,20,23,0.05)] lg:col-span-3">
