@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { ACCESS_COOKIE_NAME, getAccessGateCode } from "@/lib/accessGate";
 
-const PUBLIC_PATHS = ["/enter", "/api/access"];
+const PUBLIC_PATHS = ["/enter", "/api/access", "/api/order-automation/intake"];
 
 export function middleware(request: NextRequest) {
   const gateCode = getAccessGateCode();
