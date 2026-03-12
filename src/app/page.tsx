@@ -7,6 +7,7 @@ import {
   Copy,
   Download,
   Link2,
+  Sparkles,
   RefreshCw,
   Search,
   Trash2,
@@ -192,6 +193,41 @@ type BulkCreateResponse = {
   }>;
 };
 
+type OrderAutomationLatestResponse = {
+  success: boolean;
+  message?: string;
+  detail?: string;
+  data?: {
+    batch: {
+      id: number;
+      source: string;
+      source_sheet: string | null;
+      status: string;
+      requested_count: number;
+      created_count: number;
+      failed_count: number;
+      created_at: string;
+    };
+    items: Array<{
+      id: number;
+      mart_name: string;
+      mart_code: string | null;
+      item_type: string;
+      ad_creative: string | null;
+      quantity: number;
+      requester: string | null;
+      filename: string | null;
+      design_type: string | null;
+      spec: string | null;
+      campaign_name: string | null;
+      short_url: string | null;
+      status: string;
+      error_message: string | null;
+      created_at: string;
+    }>;
+  } | null;
+};
+
 type BulkMartRow = {
   mart_code: string;
   mart_name: string | null;
@@ -224,6 +260,7 @@ const DASHBOARD_METRIC_META = [
 const SEARCH_DEBOUNCE_MS = 280;
 const MART_PAGE_SIZE = 40;
 const HISTORY_SEARCH_DEBOUNCE_MS = 220;
+const ORDER_QR_DISMISSED_BATCH_KEY = "dismissed-order-qr-batch-id";
 
 function normalizeCreativeInput(value: string): string {
   return value.trim();
@@ -470,6 +507,10 @@ export default function Home() {
     useState<DashboardReportResponse["data"] | null>(null);
   const [copyToast, setCopyToast] = useState("");
   const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
+  const [orderSuggestionBatch, setOrderSuggestionBatch] =
+    useState<OrderAutomationLatestResponse["data"] | null>(null);
+  const [isOrderSuggestionLoading, setIsOrderSuggestionLoading] = useState(false);
+  const [isOrderSuggestionOpen, setIsOrderSuggestionOpen] = useState(false);
 
   const [isMartsLoading, setIsMartsLoading] = useState(false);
   const [isMartsLoadingMore, setIsMartsLoadingMore] = useState(false);
@@ -522,6 +563,14 @@ export default function Home() {
   const dashboardTopCreatives = useMemo(
     () => (dashboardReport?.creatives ?? []).slice(0, 6),
     [dashboardReport?.creatives],
+  );
+
+  const orderSuggestionCreatedItems = useMemo(
+    () =>
+      (orderSuggestionBatch?.items ?? []).filter(
+        (item) => item.status === "SUCCESS" && item.short_url && item.campaign_name,
+      ),
+    [orderSuggestionBatch],
   );
 
   const loadRecentLinks = useCallback(async () => {
@@ -665,6 +714,38 @@ export default function Home() {
       setDashboardReport(payload.data);
     } finally {
       setIsDashboardLoading(false);
+    }
+  }, []);
+
+  const loadOrderSuggestion = useCallback(async () => {
+    setIsOrderSuggestionLoading(true);
+
+    try {
+      const response = await fetch("/api/order-automation/latest");
+      const payload = (await response.json()) as OrderAutomationLatestResponse;
+
+      if (!response.ok || !payload.success || !payload.data) {
+        setOrderSuggestionBatch(null);
+        return;
+      }
+
+      setOrderSuggestionBatch(payload.data);
+
+      if (payload.data.batch.created_count <= 0) {
+        setIsOrderSuggestionOpen(false);
+        return;
+      }
+
+      const dismissedBatchId =
+        typeof window !== "undefined"
+          ? window.localStorage.getItem(ORDER_QR_DISMISSED_BATCH_KEY)
+          : null;
+
+      if (dismissedBatchId !== String(payload.data.batch.id)) {
+        setIsOrderSuggestionOpen(true);
+      }
+    } finally {
+      setIsOrderSuggestionLoading(false);
     }
   }, []);
 
@@ -1014,6 +1095,16 @@ export default function Home() {
     }
   };
 
+  const handleDismissOrderSuggestion = () => {
+    if (orderSuggestionBatch?.batch.id && typeof window !== "undefined") {
+      window.localStorage.setItem(
+        ORDER_QR_DISMISSED_BATCH_KEY,
+        String(orderSuggestionBatch.batch.id),
+      );
+    }
+    setIsOrderSuggestionOpen(false);
+  };
+
   const handleLoadLinkReport = async (link: LinkRow) => {
     if (reportTargetShortUrl === link.short_url) {
       return;
@@ -1108,6 +1199,10 @@ export default function Home() {
   }, [dashboardPeriod, loadDashboardReport]);
 
   useEffect(() => {
+    void loadOrderSuggestion();
+  }, [loadOrderSuggestion]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       setHistoryQueryDebounced(historyQuery.trim());
     }, HISTORY_SEARCH_DEBOUNCE_MS);
@@ -1159,6 +1254,130 @@ export default function Home() {
         </div>
       ) : null}
 
+      {isOrderSuggestionOpen && orderSuggestionBatch ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#121417]/50 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-4xl overflow-hidden rounded-[28px] border border-[#FFD8C7] bg-white shadow-[0_30px_80px_rgba(18,20,23,0.24)]">
+            <div className="flex items-start justify-between gap-4 border-b border-[#FFF0EB] bg-gradient-to-r from-[#FFF5E0] via-[#FFF8F3] to-white px-6 py-5">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-[#FFD580] bg-white px-3 py-1 text-xs font-semibold text-[#CC8200]">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  발주서 기반 QR 제안
+                </div>
+                <h2 className="mt-3 text-xl font-bold text-[#121417]">
+                  방금 생성한 발주 건의 QR 링크가 준비됐어요
+                </h2>
+                <p className="mt-1 text-sm text-[#6B6E75]">
+                  최근 발주 배치 {orderSuggestionBatch.batch.created_count}건을 바로 복사하거나 QR로 다운로드할 수 있습니다.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDismissOrderSuggestion}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[#E0E1E3] bg-white text-[#6B6E75] hover:border-[#FF9E73] hover:text-[#CC3A00]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] overflow-auto px-6 py-5">
+              <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
+                  <p className="text-xs text-[#6B6E75]">배치 생성시각</p>
+                  <p className="mt-1 font-semibold text-[#121417]">
+                    {format(new Date(orderSuggestionBatch.batch.created_at), "yyyy-MM-dd HH:mm")}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
+                  <p className="text-xs text-[#6B6E75]">성공 / 실패</p>
+                  <p className="mt-1 font-semibold text-[#121417]">
+                    {orderSuggestionBatch.batch.created_count} / {orderSuggestionBatch.batch.failed_count}
+                  </p>
+                </div>
+                <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
+                  <p className="text-xs text-[#6B6E75]">소스</p>
+                  <p className="mt-1 font-semibold text-[#121417]">
+                    {orderSuggestionBatch.batch.source_sheet || orderSuggestionBatch.batch.source}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {orderSuggestionCreatedItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-[#E0E1E3] bg-white p-4 shadow-[0_8px_20px_rgba(18,20,23,0.04)]"
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#121417]">
+                          {item.mart_name}
+                          {item.mart_code ? (
+                            <span className="ml-2 text-xs font-normal text-[#6B6E75]">
+                              ({item.mart_code})
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-1 text-xs text-[#6B6E75]">
+                          {CREATIVE_LABEL_MAP[item.ad_creative ?? ""] ?? item.item_type}
+                          {item.quantity > 1 ? ` · 수량 ${item.quantity}` : ""}
+                          {item.filename ? ` · ${item.filename}.ai` : ""}
+                        </p>
+                        <p className="mt-2 break-all text-sm text-[#2E3035]">
+                          {item.campaign_name}
+                        </p>
+                        <p className="mt-1 break-all text-xs text-[#3182CE]">
+                          {item.short_url}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => item.short_url && void handleCopy("short_url", item.short_url)}
+                          className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-xs hover:border-[#FF9E73] hover:bg-[#FFF0EB]"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                          링크 복사
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            item.short_url &&
+                            item.campaign_name &&
+                            void handleDownloadHistoryQr(item.short_url, item.campaign_name, "png")
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-xs hover:border-[#66C2A0] hover:bg-[#E6F5EF]"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          PNG
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            item.short_url &&
+                            item.campaign_name &&
+                            void handleDownloadHistoryQr(item.short_url, item.campaign_name, "svg")
+                          }
+                          className="inline-flex items-center gap-1 rounded-lg border border-[#E0E1E3] bg-white px-3 py-2 text-xs hover:border-[#FFD580] hover:bg-[#FFF5E0]"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          SVG
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {orderSuggestionBatch.batch.failed_count > 0 ? (
+                <div className="mt-4 rounded-2xl border border-[#E53E3E]/30 bg-[#FDECEC] px-4 py-3 text-xs text-[#B83232]">
+                  일부 항목은 마트명 매핑 또는 품목 매핑 실패로 QR 생성이 제외되었습니다. 세부 확인이 필요하면 알려주세요.
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
         <section className="rounded-2xl border border-[#E0E1E3] bg-white/95 p-6 shadow-[0_12px_40px_rgba(18,20,23,0.06)] backdrop-blur-sm">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1198,6 +1417,35 @@ export default function Home() {
 
         {copyToast ? (
           <section className="mt-4 rounded-xl border border-[#66C2A0] bg-[#E6F5EF] px-3 py-2 text-sm text-[#004D33]">{copyToast}</section>
+        ) : null}
+
+        {orderSuggestionBatch?.batch.created_count ? (
+          <section className="mt-4 rounded-2xl border border-[#FFD580] bg-gradient-to-r from-[#FFF5E0] via-[#FFF8F3] to-white px-4 py-3 shadow-[0_10px_24px_rgba(255,163,0,0.08)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-[#121417]">
+                  최근 발주서 기준 QR {orderSuggestionBatch.batch.created_count}건이 준비되어 있습니다.
+                </p>
+                <p className="mt-1 text-xs text-[#6B6E75]">
+                  {format(new Date(orderSuggestionBatch.batch.created_at), "yyyy-MM-dd HH:mm")} 생성
+                  {orderSuggestionBatch.batch.source_sheet
+                    ? ` · ${orderSuggestionBatch.batch.source_sheet}`
+                    : ""}
+                  {isOrderSuggestionLoading ? " · 확인 중..." : ""}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsOrderSuggestionOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-3 py-2 text-sm font-semibold text-white hover:bg-[#CC3A00]"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  QR 보기
+                </button>
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {syncSummary ? (
