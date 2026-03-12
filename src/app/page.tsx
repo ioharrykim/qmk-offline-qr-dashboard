@@ -129,6 +129,11 @@ type DashboardMetricBucket = {
   web_opens: number;
 };
 
+type DashboardMartBreakdown = {
+  mart_code: string | null;
+  mart_name: string;
+} & DashboardMetricBucket;
+
 type DashboardReportResponse = {
   success: boolean;
   message?: string;
@@ -155,11 +160,13 @@ type DashboardReportResponse = {
     daily: Array<
       {
         date: string;
+        top_marts: DashboardMartBreakdown[];
       } & DashboardMetricBucket
     >;
     creatives: Array<
       {
         ad_creative: string;
+        top_marts: DashboardMartBreakdown[];
       } & DashboardMetricBucket
     >;
   };
@@ -198,34 +205,50 @@ type OrderAutomationLatestResponse = {
   message?: string;
   detail?: string;
   data?: {
-    batch: {
-      id: number;
-      source: string;
-      source_sheet: string | null;
-      status: string;
-      requested_count: number;
-      created_count: number;
-      failed_count: number;
-      created_at: string;
-    };
-    items: Array<{
-      id: number;
-      mart_name: string;
-      mart_code: string | null;
-      item_type: string;
-      ad_creative: string | null;
-      quantity: number;
-      requester: string | null;
-      filename: string | null;
-      design_type: string | null;
-      spec: string | null;
-      campaign_name: string | null;
-      short_url: string | null;
-      status: string;
-      error_message: string | null;
-      created_at: string;
+    latest_batch_id: number | null;
+    batches: Array<{
+      batch: {
+        id: number;
+        source: string;
+        source_sheet: string | null;
+        status: string;
+        requested_count: number;
+        created_count: number;
+        failed_count: number;
+        created_at: string;
+      };
+      mart_summary: string | null;
+      requester_summary: string | null;
+      items: Array<{
+        id: number;
+        batch_id: number;
+        mart_name: string;
+        mart_code: string | null;
+        item_type: string;
+        ad_creative: string | null;
+        quantity: number;
+        requester: string | null;
+        filename: string | null;
+        design_type: string | null;
+        spec: string | null;
+        campaign_name: string | null;
+        short_url: string | null;
+        status: string;
+        error_message: string | null;
+        created_at: string;
+      }>;
     }>;
   } | null;
+};
+
+type OrderSuggestionBatchEntry = NonNullable<
+  NonNullable<OrderAutomationLatestResponse["data"]>["batches"]
+>[number];
+
+type DashboardHoverDetail = {
+  title: string;
+  subtitle: string;
+  marts: DashboardMartBreakdown[];
 };
 
 type BulkMartRow = {
@@ -322,6 +345,24 @@ function formatDashboardDateLabel(value: string) {
   return value.slice(5).replace("-", ".");
 }
 
+function buildOrderSuggestionTitle(batchEntry: OrderSuggestionBatchEntry) {
+  return (
+    batchEntry.mart_summary ??
+    `${batchEntry.batch.created_count}개 QR 배치`
+  );
+}
+
+function buildOrderSuggestionSubtitle(batchEntry: OrderSuggestionBatchEntry) {
+  const metaParts = [
+    format(new Date(batchEntry.batch.created_at), "yyyy-MM-dd HH:mm"),
+    batchEntry.batch.source_sheet || batchEntry.batch.source,
+    batchEntry.requester_summary ? `작업자 ${batchEntry.requester_summary}` : null,
+    `QR ${batchEntry.batch.created_count}건`,
+  ].filter(Boolean);
+
+  return metaParts.join(" · ");
+}
+
 function formatDeltaLabel(value: number | null) {
   if (value === null) return "신규";
   if (value === 0) return "변동 없음";
@@ -360,8 +401,20 @@ function buildTrendPath(
 
 function DashboardTrendChart({
   points,
+  onHoverPoint,
 }: {
-  points: Array<{ date: string; clicks: number; app_installs: number }>;
+  points: Array<{
+    date: string;
+    clicks: number;
+    app_installs: number;
+    top_marts: DashboardMartBreakdown[];
+  }>;
+  onHoverPoint?: (point: {
+    date: string;
+    clicks: number;
+    app_installs: number;
+    top_marts: DashboardMartBreakdown[];
+  }) => void;
 }) {
   const width = 640;
   const height = 240;
@@ -452,7 +505,14 @@ function DashboardTrendChart({
               padding -
               (point.app_installs / maxValue) * (height - padding * 2);
             return (
-              <g key={point.date}>
+              <g
+                key={point.date}
+                onMouseEnter={() => onHoverPoint?.(point)}
+                onFocus={() => onHoverPoint?.(point)}
+                className="cursor-pointer"
+              >
+                <circle cx={x} cy={clicksY} r="14" fill="transparent" />
+                <circle cx={x} cy={installsY} r="14" fill="transparent" />
                 <circle cx={x} cy={clicksY} r="4.5" fill="#FF4800" />
                 <circle cx={x} cy={installsY} r="4.5" fill="#00724C" />
               </g>
@@ -505,10 +565,14 @@ export default function Home() {
   const [dashboardPeriod, setDashboardPeriod] = useState<"7d" | "30d">("30d");
   const [dashboardReport, setDashboardReport] =
     useState<DashboardReportResponse["data"] | null>(null);
+  const [dashboardHoverDetail, setDashboardHoverDetail] =
+    useState<DashboardHoverDetail | null>(null);
   const [copyToast, setCopyToast] = useState("");
   const [martStats, setMartStats] = useState<{ total: number; enabled: number; disabled: number } | null>(null);
-  const [orderSuggestionBatch, setOrderSuggestionBatch] =
+  const [orderSuggestionData, setOrderSuggestionData] =
     useState<OrderAutomationLatestResponse["data"] | null>(null);
+  const [selectedOrderSuggestionBatchId, setSelectedOrderSuggestionBatchId] =
+    useState<number | null>(null);
   const [isOrderSuggestionLoading, setIsOrderSuggestionLoading] = useState(false);
   const [isOrderSuggestionOpen, setIsOrderSuggestionOpen] = useState(false);
 
@@ -556,6 +620,7 @@ export default function Home() {
         date: item.date,
         clicks: item.clicks,
         app_installs: item.app_installs,
+        top_marts: item.top_marts,
       })),
     [dashboardReport?.daily],
   );
@@ -565,12 +630,27 @@ export default function Home() {
     [dashboardReport?.creatives],
   );
 
+  const orderSuggestionBatches = useMemo(
+    () => (orderSuggestionData?.batches ?? []).filter((item) => item.batch.created_count > 0),
+    [orderSuggestionData],
+  );
+
+  const selectedOrderSuggestionBatch = useMemo(
+    () =>
+      orderSuggestionBatches.find(
+        (item) => item.batch.id === selectedOrderSuggestionBatchId,
+      ) ??
+      orderSuggestionBatches[0] ??
+      null,
+    [orderSuggestionBatches, selectedOrderSuggestionBatchId],
+  );
+
   const orderSuggestionCreatedItems = useMemo(
     () =>
-      (orderSuggestionBatch?.items ?? []).filter(
+      (selectedOrderSuggestionBatch?.items ?? []).filter(
         (item) => item.status === "SUCCESS" && item.short_url && item.campaign_name,
       ),
-    [orderSuggestionBatch],
+    [selectedOrderSuggestionBatch],
   );
 
   const loadRecentLinks = useCallback(async () => {
@@ -725,23 +805,32 @@ export default function Home() {
       const payload = (await response.json()) as OrderAutomationLatestResponse;
 
       if (!response.ok || !payload.success || !payload.data) {
-        setOrderSuggestionBatch(null);
+        setOrderSuggestionData(null);
+        setSelectedOrderSuggestionBatchId(null);
         return;
       }
 
-      setOrderSuggestionBatch(payload.data);
+      const eligibleBatches = (payload.data.batches ?? []).filter(
+        (item) => item.batch.created_count > 0,
+      );
+      setOrderSuggestionData(payload.data);
 
-      if (payload.data.batch.created_count <= 0) {
+      if (eligibleBatches.length === 0) {
+        setSelectedOrderSuggestionBatchId(null);
         setIsOrderSuggestionOpen(false);
         return;
       }
+
+      const latestBatchId =
+        payload.data.latest_batch_id ?? eligibleBatches[0]?.batch.id ?? null;
+      setSelectedOrderSuggestionBatchId(latestBatchId);
 
       const dismissedBatchId =
         typeof window !== "undefined"
           ? window.localStorage.getItem(ORDER_QR_DISMISSED_BATCH_KEY)
           : null;
 
-      if (dismissedBatchId !== String(payload.data.batch.id)) {
+      if (dismissedBatchId !== String(latestBatchId)) {
         setIsOrderSuggestionOpen(true);
       }
     } finally {
@@ -1096,13 +1185,18 @@ export default function Home() {
   };
 
   const handleDismissOrderSuggestion = () => {
-    if (orderSuggestionBatch?.batch.id && typeof window !== "undefined") {
+    if (orderSuggestionData?.latest_batch_id && typeof window !== "undefined") {
       window.localStorage.setItem(
         ORDER_QR_DISMISSED_BATCH_KEY,
-        String(orderSuggestionBatch.batch.id),
+        String(orderSuggestionData.latest_batch_id),
       );
     }
     setIsOrderSuggestionOpen(false);
+  };
+
+  const handleOpenOrderSuggestionBatch = (batchId: number) => {
+    setSelectedOrderSuggestionBatchId(batchId);
+    setIsOrderSuggestionOpen(true);
   };
 
   const handleLoadLinkReport = async (link: LinkRow) => {
@@ -1210,6 +1304,20 @@ export default function Home() {
   }, [historyQuery]);
 
   useEffect(() => {
+    const latestPoint = dashboardReport?.daily?.[dashboardReport.daily.length - 1];
+    if (!latestPoint) {
+      setDashboardHoverDetail(null);
+      return;
+    }
+
+    setDashboardHoverDetail({
+      title: `${formatDashboardDateLabel(latestPoint.date)} 상위 마트`,
+      subtitle: "가장 최근 일자 기준 기여도입니다.",
+      marts: latestPoint.top_marts,
+    });
+  }, [dashboardReport]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => {
       void loadMartOptions(martQuery, showAllMarts);
     }, SEARCH_DEBOUNCE_MS);
@@ -1254,7 +1362,7 @@ export default function Home() {
         </div>
       ) : null}
 
-      {isOrderSuggestionOpen && orderSuggestionBatch ? (
+      {isOrderSuggestionOpen && selectedOrderSuggestionBatch ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#121417]/50 px-4 py-6 backdrop-blur-sm">
           <div className="w-full max-w-4xl overflow-hidden rounded-[28px] border border-[#FFD8C7] bg-white shadow-[0_30px_80px_rgba(18,20,23,0.24)]">
             <div className="flex items-start justify-between gap-4 border-b border-[#FFF0EB] bg-gradient-to-r from-[#FFF5E0] via-[#FFF8F3] to-white px-6 py-5">
@@ -1264,10 +1372,10 @@ export default function Home() {
                   발주서 기반 QR 제안
                 </div>
                 <h2 className="mt-3 text-xl font-bold text-[#121417]">
-                  방금 생성한 발주 건의 QR 링크가 준비됐어요
+                  {buildOrderSuggestionTitle(selectedOrderSuggestionBatch)} QR이 준비됐어요
                 </h2>
                 <p className="mt-1 text-sm text-[#6B6E75]">
-                  최근 발주 배치 {orderSuggestionBatch.batch.created_count}건을 바로 복사하거나 QR로 다운로드할 수 있습니다.
+                  {buildOrderSuggestionSubtitle(selectedOrderSuggestionBatch)}
                 </p>
               </div>
               <button
@@ -1284,19 +1392,19 @@ export default function Home() {
                 <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
                   <p className="text-xs text-[#6B6E75]">배치 생성시각</p>
                   <p className="mt-1 font-semibold text-[#121417]">
-                    {format(new Date(orderSuggestionBatch.batch.created_at), "yyyy-MM-dd HH:mm")}
+                    {format(new Date(selectedOrderSuggestionBatch.batch.created_at), "yyyy-MM-dd HH:mm")}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
                   <p className="text-xs text-[#6B6E75]">성공 / 실패</p>
                   <p className="mt-1 font-semibold text-[#121417]">
-                    {orderSuggestionBatch.batch.created_count} / {orderSuggestionBatch.batch.failed_count}
+                    {selectedOrderSuggestionBatch.batch.created_count} / {selectedOrderSuggestionBatch.batch.failed_count}
                   </p>
                 </div>
                 <div className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] px-4 py-3">
                   <p className="text-xs text-[#6B6E75]">소스</p>
                   <p className="mt-1 font-semibold text-[#121417]">
-                    {orderSuggestionBatch.batch.source_sheet || orderSuggestionBatch.batch.source}
+                    {selectedOrderSuggestionBatch.batch.source_sheet || selectedOrderSuggestionBatch.batch.source}
                   </p>
                 </div>
               </div>
@@ -1368,7 +1476,7 @@ export default function Home() {
                 ))}
               </div>
 
-              {orderSuggestionBatch.batch.failed_count > 0 ? (
+              {selectedOrderSuggestionBatch.batch.failed_count > 0 ? (
                 <div className="mt-4 rounded-2xl border border-[#E53E3E]/30 bg-[#FDECEC] px-4 py-3 text-xs text-[#B83232]">
                   일부 항목은 마트명 매핑 또는 품목 매핑 실패로 QR 생성이 제외되었습니다. 세부 확인이 필요하면 알려주세요.
                 </div>
@@ -1419,31 +1527,43 @@ export default function Home() {
           <section className="mt-4 rounded-xl border border-[#66C2A0] bg-[#E6F5EF] px-3 py-2 text-sm text-[#004D33]">{copyToast}</section>
         ) : null}
 
-        {orderSuggestionBatch?.batch.created_count ? (
+        {orderSuggestionBatches.length > 0 ? (
           <section className="mt-4 rounded-2xl border border-[#FFD580] bg-gradient-to-r from-[#FFF5E0] via-[#FFF8F3] to-white px-4 py-3 shadow-[0_10px_24px_rgba(255,163,0,0.08)]">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#FFE7BF] pb-3">
               <div>
                 <p className="text-sm font-semibold text-[#121417]">
-                  최근 발주서 기준 QR {orderSuggestionBatch.batch.created_count}건이 준비되어 있습니다.
+                  최근 발주서 기반 QR 생성 이력이 있습니다.
                 </p>
                 <p className="mt-1 text-xs text-[#6B6E75]">
-                  {format(new Date(orderSuggestionBatch.batch.created_at), "yyyy-MM-dd HH:mm")} 생성
-                  {orderSuggestionBatch.batch.source_sheet
-                    ? ` · ${orderSuggestionBatch.batch.source_sheet}`
-                    : ""}
+                  최근 3건까지 바로 열어 확인할 수 있습니다.
                   {isOrderSuggestionLoading ? " · 확인 중..." : ""}
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsOrderSuggestionOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-3 py-2 text-sm font-semibold text-white hover:bg-[#CC3A00]"
+            </div>
+            <div className="mt-3 space-y-3">
+              {orderSuggestionBatches.slice(0, 3).map((batchEntry) => (
+                <div
+                  key={batchEntry.batch.id}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[#FFE7BF] bg-white/80 px-3 py-3"
                 >
-                  <Sparkles className="h-4 w-4" />
-                  QR 보기
-                </button>
-              </div>
+                  <div>
+                    <p className="text-sm font-semibold text-[#121417]">
+                      {buildOrderSuggestionTitle(batchEntry)}
+                    </p>
+                    <p className="mt-1 text-xs text-[#6B6E75]">
+                      {buildOrderSuggestionSubtitle(batchEntry)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenOrderSuggestionBatch(batchEntry.batch.id)}
+                    className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-3 py-2 text-sm font-semibold text-white hover:bg-[#CC3A00]"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    QR 보기
+                  </button>
+                </div>
+              ))}
             </div>
           </section>
         ) : null}
@@ -1565,7 +1685,16 @@ export default function Home() {
               </div>
 
               <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-                <DashboardTrendChart points={dashboardTrendPoints} />
+                <DashboardTrendChart
+                  points={dashboardTrendPoints}
+                  onHoverPoint={(point) =>
+                    setDashboardHoverDetail({
+                      title: `${formatDashboardDateLabel(point.date)} 상위 마트`,
+                      subtitle: `Clicks ${formatMetricNumber(point.clicks)} · Installs ${formatMetricNumber(point.app_installs)}`,
+                      marts: point.top_marts,
+                    })
+                  }
+                />
 
                 <div className="rounded-2xl border border-[#E0E1E3] bg-white p-4 shadow-[0_10px_30px_rgba(18,20,23,0.04)]">
                   <div className="flex items-center justify-between gap-3">
@@ -1580,6 +1709,58 @@ export default function Home() {
                     </span>
                   </div>
 
+                  <div className="mt-4 rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#121417]">
+                          {dashboardHoverDetail?.title ?? "마트별 기여도"}
+                        </p>
+                        <p className="mt-1 text-xs text-[#6B6E75]">
+                          {dashboardHoverDetail?.subtitle ??
+                            "그래프 포인트나 소재 카드에 마우스를 올리면 상위 마트를 보여드립니다."}
+                        </p>
+                      </div>
+                      <span className="rounded-full border border-[#E0E1E3] bg-white px-2 py-1 text-[10px] font-medium text-[#6B6E75]">
+                        마우스 오버
+                      </span>
+                    </div>
+
+                    {dashboardHoverDetail?.marts?.length ? (
+                      <div className="mt-3 space-y-2">
+                        {dashboardHoverDetail.marts.map((mart, index) => (
+                          <div
+                            key={`${dashboardHoverDetail.title}-${mart.mart_code ?? mart.mart_name}-${index}`}
+                            className="rounded-xl border border-[#EAECEF] bg-white px-3 py-2"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-sm font-semibold text-[#121417]">
+                                  {mart.mart_name}
+                                </p>
+                                <p className="mt-0.5 text-[11px] text-[#6B6E75]">
+                                  {mart.mart_code ?? "마트 코드 없음"}
+                                </p>
+                              </div>
+                              <div className="text-right text-[11px] text-[#6B6E75]">
+                                <p>Clicks {formatMetricNumber(mart.clicks)}</p>
+                                <p>Installs {formatMetricNumber(mart.app_installs)}</p>
+                              </div>
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[#6B6E75]">
+                              <span>Impressions {formatMetricNumber(mart.impressions)}</span>
+                              <span>Deeplink {formatMetricNumber(mart.app_deeplink_opens)}</span>
+                              <span>Web Opens {formatMetricNumber(mart.web_opens)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 rounded-xl border border-dashed border-[#E0E1E3] bg-white px-3 py-4 text-center text-xs text-[#6B6E75]">
+                        아직 표시할 마트별 데이터가 없습니다.
+                      </div>
+                    )}
+                  </div>
+
                   {dashboardTopCreatives.length === 0 ? (
                     <div className="mt-6 rounded-2xl border border-dashed border-[#E0E1E3] bg-[#F8F8F9] px-4 py-8 text-center text-sm text-[#6B6E75]">
                       해당 기간 데이터가 없습니다.
@@ -1592,7 +1773,14 @@ export default function Home() {
                         return (
                           <div
                             key={creative.ad_creative}
-                            className="rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] p-3"
+                            className="cursor-pointer rounded-2xl border border-[#E0E1E3] bg-[#FCFCFD] p-3"
+                            onMouseEnter={() =>
+                              setDashboardHoverDetail({
+                                title: `${CREATIVE_LABEL_MAP[creative.ad_creative] ?? creative.ad_creative} 상위 마트`,
+                                subtitle: `Clicks ${formatMetricNumber(creative.clicks)} · 최근 ${dashboardPeriod === "7d" ? "7일" : "30일"} 기준`,
+                                marts: creative.top_marts,
+                              })
+                            }
                           >
                             <div className="flex items-center justify-between gap-3">
                               <div>

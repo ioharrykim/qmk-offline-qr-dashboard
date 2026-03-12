@@ -1,6 +1,8 @@
 import { addDays, subDays } from "date-fns";
 import { NextRequest, NextResponse } from "next/server";
 
+import { getSupabaseServerClient } from "@/lib/supabaseServer";
+
 type AirbridgeTask = {
   status?: "PENDING" | "RUNNING" | "SUCCESS" | "FAILURE" | "CANCELED";
   taskId?: string;
@@ -21,6 +23,11 @@ type DashboardMetricSummary = {
 
 type DashboardMetricBucket = Record<DashboardMetricKey, number>;
 
+type DashboardMartBreakdown = {
+  mart_code: string | null;
+  mart_name: string;
+} & DashboardMetricBucket;
+
 type DashboardResponseData = {
   channel_name: string;
   period_days: number;
@@ -37,11 +44,13 @@ type DashboardResponseData = {
   daily: Array<
     {
       date: string;
+      top_marts: DashboardMartBreakdown[];
     } & DashboardMetricBucket
   >;
   creatives: Array<
     {
       ad_creative: string;
+      top_marts: DashboardMartBreakdown[];
     } & DashboardMetricBucket
   >;
 };
@@ -112,6 +121,27 @@ function buildZeroMetricBucket(): DashboardMetricBucket {
     app_deeplink_opens: 0,
     web_opens: 0,
   };
+}
+
+function buildTopMartBreakdown(
+  martMap: Map<string, DashboardMetricBucket>,
+  martNameMap: Map<string, string>,
+): DashboardMartBreakdown[] {
+  return Array.from(martMap.entries())
+    .map(([martCode, metrics]) => ({
+      mart_code: martCode === "__unknown__" ? null : martCode,
+      mart_name:
+        martCode === "__unknown__"
+          ? "미확인 마트"
+          : martNameMap.get(martCode) ?? martCode,
+      ...metrics,
+    }))
+    .sort((a, b) => {
+      if (b.clicks !== a.clicks) return b.clicks - a.clicks;
+      if (b.app_installs !== a.app_installs) return b.app_installs - a.app_installs;
+      return b.web_opens - a.web_opens;
+    })
+    .slice(0, 5);
 }
 
 function buildDateRange(from: Date, to: Date, timeZone: string) {
@@ -247,7 +277,7 @@ export async function GET(request: NextRequest) {
         from: queryFrom,
         to: queryTo,
         metrics: METRIC_KEYS,
-        groupBys: ["event_date", "ad_creative"],
+        groupBys: ["event_date", "ad_creative", "ad_group"],
         sorts: [
           {
             fieldName: "event_date",
@@ -324,10 +354,26 @@ export async function GET(request: NextRequest) {
   const currentTotals = buildZeroMetricBucket();
   const previousTotals = buildZeroMetricBucket();
   const dailyMap = new Map<string, DashboardMetricBucket>();
+  const dailyMartMap = new Map<string, Map<string, DashboardMetricBucket>>();
   const creativeMap = new Map<string, DashboardMetricBucket>();
+  const creativeMartMap = new Map<string, Map<string, DashboardMetricBucket>>();
+
+  const { client } = getSupabaseServerClient();
+  const martNameMap = new Map<string, string>();
+  if (client) {
+    const martsResult = await client.from("marts").select("name, code");
+    if (!martsResult.error) {
+      for (const mart of martsResult.data ?? []) {
+        if (mart?.code && mart?.name) {
+          martNameMap.set(String(mart.code), String(mart.name));
+        }
+      }
+    }
+  }
 
   for (const date of currentDates) {
     dailyMap.set(date, buildZeroMetricBucket());
+    dailyMartMap.set(date, new Map());
   }
 
   if (Array.isArray(rows)) {
@@ -339,6 +385,10 @@ export async function GET(request: NextRequest) {
         typeof groupBys[1] === "string" && groupBys[1].trim()
           ? groupBys[1].trim()
           : "unknown";
+      const martCode =
+        typeof groupBys[2] === "string" && groupBys[2].trim()
+          ? groupBys[2].trim()
+          : "__unknown__";
       const values = toRecord(row?.values);
 
       if (!eventDate || !values) continue;
@@ -353,16 +403,29 @@ export async function GET(request: NextRequest) {
 
       if (currentDateSet.has(eventDate)) {
         const currentBucket = dailyMap.get(eventDate) ?? buildZeroMetricBucket();
+        const currentDayMartMap =
+          dailyMartMap.get(eventDate) ?? new Map<string, DashboardMetricBucket>();
         const creativeBucket = creativeMap.get(adCreative) ?? buildZeroMetricBucket();
+        const currentCreativeMartMap =
+          creativeMartMap.get(adCreative) ?? new Map<string, DashboardMetricBucket>();
+        const dayMartBucket = currentDayMartMap.get(martCode) ?? buildZeroMetricBucket();
+        const creativeMartBucket =
+          currentCreativeMartMap.get(martCode) ?? buildZeroMetricBucket();
 
         for (const metricKey of METRIC_KEYS) {
           currentTotals[metricKey] += metrics[metricKey];
           currentBucket[metricKey] += metrics[metricKey];
           creativeBucket[metricKey] += metrics[metricKey];
+          dayMartBucket[metricKey] += metrics[metricKey];
+          creativeMartBucket[metricKey] += metrics[metricKey];
         }
 
         dailyMap.set(eventDate, currentBucket);
+        currentDayMartMap.set(martCode, dayMartBucket);
+        dailyMartMap.set(eventDate, currentDayMartMap);
         creativeMap.set(adCreative, creativeBucket);
+        currentCreativeMartMap.set(martCode, creativeMartBucket);
+        creativeMartMap.set(adCreative, currentCreativeMartMap);
       } else if (previousDateSet.has(eventDate)) {
         for (const metricKey of METRIC_KEYS) {
           previousTotals[metricKey] += metrics[metricKey];
@@ -427,11 +490,19 @@ export async function GET(request: NextRequest) {
     },
     daily: currentDates.map((date) => ({
       date,
+      top_marts: buildTopMartBreakdown(
+        dailyMartMap.get(date) ?? new Map<string, DashboardMetricBucket>(),
+        martNameMap,
+      ),
       ...(dailyMap.get(date) ?? buildZeroMetricBucket()),
     })),
     creatives: Array.from(creativeMap.entries())
       .map(([ad_creative, metrics]) => ({
         ad_creative,
+        top_marts: buildTopMartBreakdown(
+          creativeMartMap.get(ad_creative) ?? new Map<string, DashboardMetricBucket>(),
+          martNameMap,
+        ),
         ...metrics,
       }))
       .sort((a, b) => b.clicks - a.clicks),
