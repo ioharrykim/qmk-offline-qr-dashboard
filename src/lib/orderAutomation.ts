@@ -1,4 +1,5 @@
 export type OrderAutomationRowInput = {
+  handler?: string | null;
   mart_name?: string;
   item_type?: string;
   count?: number | string | null;
@@ -19,6 +20,7 @@ export type ResolvedOrderTask = {
   item_type: string;
   ad_creative: string;
   quantity: number;
+  handler: string | null;
   requester: string | null;
   filename: string | null;
   design_type: string | null;
@@ -31,6 +33,7 @@ export type UnresolvedOrderTask = {
   item_type: string;
   ad_creative: string | null;
   quantity: number;
+  handler: string | null;
   requester: string | null;
   filename: string | null;
   design_type: string | null;
@@ -105,6 +108,7 @@ export function resolveOrderAutomationTasks(params: {
     const martName = String(rawRow.mart_name ?? "").trim();
     const itemType = String(rawRow.item_type ?? "").trim();
     const quantity = parsePositiveInteger(rawRow.count);
+    const handler = rawRow.handler?.toString().trim() || null;
     const requester = rawRow.requester?.toString().trim() || null;
     const filename = rawRow.filename?.toString().trim() || null;
     const designType = rawRow.design_type?.toString().trim() || null;
@@ -117,6 +121,7 @@ export function resolveOrderAutomationTasks(params: {
         item_type: itemType || "(품목 없음)",
         ad_creative: null,
         quantity,
+        handler,
         requester,
         filename,
         design_type: designType,
@@ -134,6 +139,7 @@ export function resolveOrderAutomationTasks(params: {
         item_type: itemType,
         ad_creative: null,
         quantity,
+        handler,
         requester,
         filename,
         design_type: designType,
@@ -151,6 +157,7 @@ export function resolveOrderAutomationTasks(params: {
         item_type: itemType,
         ad_creative: null,
         quantity,
+        handler,
         requester,
         filename,
         design_type: designType,
@@ -165,6 +172,7 @@ export function resolveOrderAutomationTasks(params: {
     if (existing) {
       existing.quantity += quantity;
       if (!existing.filename && filename) existing.filename = filename;
+      if (!existing.handler && handler) existing.handler = handler;
       if (!existing.requester && requester) existing.requester = requester;
       if (!existing.design_type && designType) existing.design_type = designType;
       if (!existing.spec && spec) existing.spec = spec;
@@ -177,6 +185,7 @@ export function resolveOrderAutomationTasks(params: {
       item_type: itemType,
       ad_creative: adCreative,
       quantity,
+      handler,
       requester,
       filename,
       design_type: designType,

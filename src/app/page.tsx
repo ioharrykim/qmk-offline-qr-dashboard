@@ -218,6 +218,7 @@ type OrderAutomationLatestResponse = {
         created_at: string;
       };
       mart_summary: string | null;
+      handler_summary: string | null;
       requester_summary: string | null;
       items: Array<{
         id: number;
@@ -227,6 +228,7 @@ type OrderAutomationLatestResponse = {
         item_type: string;
         ad_creative: string | null;
         quantity: number;
+        handler: string | null;
         requester: string | null;
         filename: string | null;
         design_type: string | null;
@@ -356,7 +358,8 @@ function buildOrderSuggestionSubtitle(batchEntry: OrderSuggestionBatchEntry) {
   const metaParts = [
     format(new Date(batchEntry.batch.created_at), "yyyy-MM-dd HH:mm"),
     batchEntry.batch.source_sheet || batchEntry.batch.source,
-    batchEntry.requester_summary ? `작업자 ${batchEntry.requester_summary}` : null,
+    batchEntry.requester_summary ? `요청자 ${batchEntry.requester_summary}` : null,
+    batchEntry.handler_summary ? `담당자 ${batchEntry.handler_summary}` : null,
     `QR ${batchEntry.batch.created_count}건`,
   ].filter(Boolean);
 
@@ -1429,6 +1432,8 @@ export default function Home() {
                           {CREATIVE_LABEL_MAP[item.ad_creative ?? ""] ?? item.item_type}
                           {item.quantity > 1 ? ` · 수량 ${item.quantity}` : ""}
                           {item.filename ? ` · ${item.filename}.ai` : ""}
+                          {item.requester ? ` · 요청자 ${item.requester}` : ""}
+                          {item.handler ? ` · 담당자 ${item.handler}` : ""}
                         </p>
                         <p className="mt-2 break-all text-sm text-[#2E3035]">
                           {item.campaign_name}

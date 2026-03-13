@@ -38,6 +38,9 @@ create index if not exists idx_order_qr_batch_items_batch_id
 create index if not exists idx_order_qr_batch_items_created_at
   on public.order_qr_batch_items (created_at desc);
 
+alter table if exists public.order_qr_batch_items
+  add column if not exists handler text;
+
 alter table public.order_qr_batches enable row level security;
 alter table public.order_qr_batch_items enable row level security;
 

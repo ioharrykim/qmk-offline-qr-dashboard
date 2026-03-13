@@ -25,6 +25,7 @@ type ItemRow = {
   item_type: string;
   ad_creative: string | null;
   quantity: number;
+  handler: string | null;
   requester: string | null;
   filename: string | null;
   design_type: string | null;
@@ -41,6 +42,43 @@ function summarizeNames(values: string[]) {
   if (unique.length === 0) return null;
   if (unique.length === 1) return unique[0];
   return `${unique[0]} 외 ${unique.length - 1}건`;
+}
+
+async function fetchBatchItems(
+  client: NonNullable<ReturnType<typeof getSupabaseServerClient>["client"]>,
+  batchIds: number[],
+) {
+  const withHandler = await client
+    .from("order_qr_batch_items")
+    .select(
+      "id, batch_id, mart_name, mart_code, item_type, ad_creative, quantity, handler, requester, filename, design_type, spec, campaign_name, short_url, status, error_message, created_at",
+    )
+    .in("batch_id", batchIds)
+    .order("created_at", { ascending: true });
+
+  if (!withHandler.error) return withHandler;
+
+  if (!withHandler.error.message.toLowerCase().includes("handler")) {
+    return withHandler;
+  }
+
+  const fallback = await client
+    .from("order_qr_batch_items")
+    .select(
+      "id, batch_id, mart_name, mart_code, item_type, ad_creative, quantity, requester, filename, design_type, spec, campaign_name, short_url, status, error_message, created_at",
+    )
+    .in("batch_id", batchIds)
+    .order("created_at", { ascending: true });
+
+  if (!fallback.error) {
+    const normalized = (fallback.data ?? []).map((item) => ({
+      ...item,
+      handler: null,
+    }));
+    return { ...fallback, data: normalized };
+  }
+
+  return fallback;
 }
 
 export async function GET() {
@@ -80,13 +118,7 @@ export async function GET() {
   }
 
   const batchIds = batches.map((batch) => batch.id);
-  const itemsResult = await client
-    .from("order_qr_batch_items")
-    .select(
-      "id, batch_id, mart_name, mart_code, item_type, ad_creative, quantity, requester, filename, design_type, spec, campaign_name, short_url, status, error_message, created_at",
-    )
-    .in("batch_id", batchIds)
-    .order("created_at", { ascending: true });
+  const itemsResult = await fetchBatchItems(client, batchIds);
 
   if (itemsResult.error) {
     return NextResponse.json(
@@ -111,6 +143,7 @@ export async function GET() {
     return {
       batch,
       mart_summary: summarizeNames(successfulItems.map((item) => item.mart_name)),
+      handler_summary: summarizeNames(successfulItems.map((item) => item.handler ?? "")),
       requester_summary: summarizeNames(successfulItems.map((item) => item.requester ?? "")),
       items,
     };

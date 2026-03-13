@@ -43,6 +43,23 @@ async function createWithConcurrency<T>(
   await Promise.all(workers);
 }
 
+async function insertBatchItemWithFallback(
+  client: NonNullable<ReturnType<typeof getSupabaseServerClient>["client"]>,
+  payload: Record<string, unknown>,
+) {
+  const insertResult = await client.from("order_qr_batch_items").insert(payload);
+  if (
+    insertResult.error &&
+    payload.handler &&
+    insertResult.error.message.toLowerCase().includes("handler")
+  ) {
+    const fallbackPayload = { ...payload };
+    delete fallbackPayload.handler;
+    return client.from("order_qr_batch_items").insert(fallbackPayload);
+  }
+  return insertResult;
+}
+
 export async function POST(request: Request) {
   const expectedSecret = process.env.ORDER_AUTOMATION_SECRET?.trim();
   if (!expectedSecret) {
@@ -133,13 +150,14 @@ export async function POST(request: Request) {
 
   for (const unresolved of resolvedTasks.unresolved) {
     failedCount += 1;
-    await client.from("order_qr_batch_items").insert({
+    await insertBatchItemWithFallback(client, {
       batch_id: batchId,
       mart_name: unresolved.mart_name,
       mart_code: unresolved.mart_code,
       item_type: unresolved.item_type,
       ad_creative: unresolved.ad_creative,
       quantity: unresolved.quantity,
+      handler: unresolved.handler,
       requester: unresolved.requester,
       filename: unresolved.filename,
       design_type: unresolved.design_type,
@@ -166,13 +184,14 @@ export async function POST(request: Request) {
           short_url: created.short_url,
         });
 
-        const itemInsert = await client.from("order_qr_batch_items").insert({
+        const itemInsert = await insertBatchItemWithFallback(client, {
           batch_id: batchId,
           mart_name: task.mart_name,
           mart_code: task.mart_code,
           item_type: task.item_type,
           ad_creative: task.ad_creative,
           quantity: task.quantity,
+          handler: task.handler,
           requester: task.requester,
           filename: task.filename,
           design_type: task.design_type,
@@ -187,13 +206,14 @@ export async function POST(request: Request) {
         }
       } catch (error) {
         failedCount += 1;
-        await client.from("order_qr_batch_items").insert({
+        await insertBatchItemWithFallback(client, {
           batch_id: batchId,
           mart_name: task.mart_name,
           mart_code: task.mart_code,
           item_type: task.item_type,
           ad_creative: task.ad_creative,
           quantity: task.quantity,
+          handler: task.handler,
           requester: task.requester,
           filename: task.filename,
           design_type: task.design_type,
