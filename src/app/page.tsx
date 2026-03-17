@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { format } from "date-fns";
+import DashboardHeaderNav from "@/components/DashboardHeaderNav";
 
 type Mart = {
   name: string;
@@ -1350,6 +1351,10 @@ export default function Home() {
 
   return (
     <main className="qmk-surface min-h-screen text-[#121417]">
+      <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 lg:px-8">
+        <DashboardHeaderNav />
+      </div>
+
       {isSyncingMarts || isClearingLinks || isBulkSubmitting ? (
         <div className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center bg-black/10 p-6 sm:items-start">
           <div className="inline-flex items-center gap-2 rounded-full border border-[#E0E1E3] bg-white px-4 py-2 text-sm font-medium shadow-xl">
@@ -1517,13 +1522,6 @@ export default function Home() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <a
-                href="/flyer-images-report"
-                className="inline-flex items-center gap-2 rounded-xl border border-[#E0E1E3] bg-white px-4 py-2 text-sm font-semibold text-[#121417] transition hover:border-[#FF9E73] hover:bg-[#FFF5F0]"
-              >
-                <BarChart3 className="h-4 w-4" />
-                전단 이미지 리포트
-              </a>
               <button
                 type="button"
                 onClick={handleSyncMarts}

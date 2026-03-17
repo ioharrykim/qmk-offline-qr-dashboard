@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { ArrowLeft, Image as ImageIcon, RefreshCw } from "lucide-react";
+import { Image as ImageIcon, RefreshCw } from "lucide-react";
+import DashboardHeaderNav from "@/components/DashboardHeaderNav";
 
 type DashboardMetricKey =
   | "clicks"
@@ -342,8 +343,12 @@ export default function FlyerImagesReportClient() {
   const periodLabel = period === "30d" ? "최근 30일" : period === "90d" ? "최근 90일" : "최근 400일";
 
   return (
-    <main className="qmk-surface min-h-screen px-4 py-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <main className="qmk-surface min-h-screen text-[#121417]">
+      <div className="mx-auto w-full max-w-6xl px-4 pt-4 sm:px-6 lg:px-8">
+        <DashboardHeaderNav />
+      </div>
+
+      <div className="mx-auto w-full max-w-6xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
         <section className="rounded-[32px] border border-[#E0E1E3] bg-white px-6 py-7 shadow-[0_18px_60px_rgba(18,20,23,0.08)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
@@ -373,13 +378,6 @@ export default function FlyerImagesReportClient() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <a
-                href="/"
-                className="inline-flex items-center gap-2 rounded-xl border border-[#E0E1E3] bg-white px-4 py-2.5 text-sm font-medium text-[#121417] hover:border-[#FF9E73] hover:bg-[#FFF5F0]"
-              >
-                <ArrowLeft className="h-4 w-4" />
-                메인으로
-              </a>
               <button
                 type="button"
                 onClick={() => void loadReport(period, true)}
