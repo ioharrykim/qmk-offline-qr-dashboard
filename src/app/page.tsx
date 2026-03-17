@@ -1516,15 +1516,24 @@ export default function Home() {
                 ) : null}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleSyncMarts}
-              disabled={isSyncingMarts || isSubmitting || isBulkSubmitting}
-              className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
-            >
-              {isSyncingMarts ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              마트 데이터 동기화
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href="/flyer-images-report"
+                className="inline-flex items-center gap-2 rounded-xl border border-[#E0E1E3] bg-white px-4 py-2 text-sm font-semibold text-[#121417] transition hover:border-[#FF9E73] hover:bg-[#FFF5F0]"
+              >
+                <BarChart3 className="h-4 w-4" />
+                전단 이미지 리포트
+              </a>
+              <button
+                type="button"
+                onClick={handleSyncMarts}
+                disabled={isSyncingMarts || isSubmitting || isBulkSubmitting}
+                className="inline-flex items-center gap-2 rounded-xl bg-[#FF4800] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#CC3A00] disabled:cursor-not-allowed disabled:bg-[#FF9E73]"
+              >
+                {isSyncingMarts ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                마트 데이터 동기화
+              </button>
+            </div>
           </div>
         </section>
 
