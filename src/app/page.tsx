@@ -201,6 +201,22 @@ type BulkCreateResponse = {
   }>;
 };
 
+type SharedReportCreateResponse = {
+  success: boolean;
+  message?: string;
+  detail?: string;
+  data?: {
+    id: number;
+    share_slug: string;
+    campaign_name: string;
+    label: string | null;
+    is_active: boolean;
+    expires_at: string | null;
+    created_at: string;
+    share_url: string;
+  };
+};
+
 type OrderAutomationLatestResponse = {
   success: boolean;
   message?: string;
@@ -590,6 +606,7 @@ export default function Home() {
   const [isReportLoading, setIsReportLoading] = useState(false);
   const [isClearingLinks, setIsClearingLinks] = useState(false);
   const [reportTargetShortUrl, setReportTargetShortUrl] = useState<string | null>(null);
+  const [shareTargetCampaign, setShareTargetCampaign] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [historyQuery, setHistoryQuery] = useState("");
@@ -1269,6 +1286,38 @@ export default function Home() {
     } finally {
       setIsReportLoading(false);
       setReportTargetShortUrl(null);
+    }
+  };
+
+  const handleCreateSharedReport = async (campaignName: string) => {
+    setShareTargetCampaign(campaignName);
+    setErrorMessage(null);
+
+    try {
+      const response = await fetch("/api/shared-reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_name: campaignName }),
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as SharedReportCreateResponse;
+
+      if (!response.ok || !payload.success || !payload.data?.share_url) {
+        setErrorMessage(
+          `공유 리포트 링크 생성 실패: ${payload.message ?? "unknown error"}${
+            payload.detail ? ` (${payload.detail})` : ""
+          }`,
+        );
+        return;
+      }
+
+      await copyText(payload.data.share_url);
+      setCopyToast("외부 공유 링크 복사 완료");
+      window.setTimeout(() => setCopyToast(""), 1600);
+    } catch {
+      setErrorMessage("외부 공유 링크 생성에 실패했습니다.");
+    } finally {
+      setShareTargetCampaign(null);
     }
   };
 
@@ -2509,19 +2558,36 @@ export default function Home() {
                                       {link.short_url}
                                     </p>
                                   </div>
-                                  {reportForRow ? (
-                                    <span
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                                        reportForRow.report_status === "SUCCESS"
-                                          ? "bg-[#E6F5EF] text-[#004D33]"
-                                          : reportForRow.report_status === "PENDING"
-                                            ? "bg-[#FFF5E0] text-[#CC8200]"
-                                            : "bg-[#FDECEC] text-[#B83232]"
-                                      }`}
+                                  <div className="flex flex-wrap items-center justify-end gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCreateSharedReport(link.campaign_name)}
+                                      disabled={shareTargetCampaign === link.campaign_name}
+                                      className="inline-flex items-center gap-1.5 rounded-full border border-[#FFD8C7] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#CC3A00] transition hover:-translate-y-[1px] hover:bg-[#FFF0EB] disabled:cursor-not-allowed disabled:opacity-60"
                                     >
-                                      {reportForRow.report_status}
-                                    </span>
-                                  ) : null}
+                                      {shareTargetCampaign === link.campaign_name ? (
+                                        <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                      ) : (
+                                        <Link2 className="h-3.5 w-3.5" />
+                                      )}
+                                      {shareTargetCampaign === link.campaign_name
+                                        ? "발급 중..."
+                                        : "외부 공유 링크"}
+                                    </button>
+                                    {reportForRow ? (
+                                      <span
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                                          reportForRow.report_status === "SUCCESS"
+                                            ? "bg-[#E6F5EF] text-[#004D33]"
+                                            : reportForRow.report_status === "PENDING"
+                                              ? "bg-[#FFF5E0] text-[#CC8200]"
+                                              : "bg-[#FDECEC] text-[#B83232]"
+                                        }`}
+                                      >
+                                        {reportForRow.report_status}
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </div>
 
                                 {isLoadingThisReport && !reportForRow ? (
