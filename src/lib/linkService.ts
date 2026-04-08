@@ -175,6 +175,16 @@ export async function createLinkRecord(params: {
     .single();
 
   if (error) {
+    const normalizedMessage = error.message.toLowerCase();
+    if (
+      normalizedMessage.includes('duplicate key value violates unique constraint "links_pkey"') ||
+      normalizedMessage.includes("duplicate key") && normalizedMessage.includes("links_pkey")
+    ) {
+      throw new LinkServiceError(
+        "DB",
+        "링크 저장 실패 (links.id 시퀀스가 현재 데이터보다 뒤처져 있습니다. Supabase에서 links 시퀀스 재동기화 SQL을 1회 실행해 주세요.)",
+      );
+    }
     throw new LinkServiceError("DB", error.message);
   }
 
